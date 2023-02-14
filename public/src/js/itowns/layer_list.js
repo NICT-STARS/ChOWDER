@@ -2,12 +2,12 @@
  * Copyright (c) 2016-2018 Research Institute for Information Technology(RIIT), Kyushu University. All rights reserved.
  * Copyright (c) 2016-2018 RIKEN Center for Computational Science. All rights reserved.
  */
-"use strict";
 
 import Select from '../components/select';
 import Button from '../components/button';
 import InputDialog from '../components/input_dialog';
 import LayerDialog from './layer_dialog';
+import ITownsConstants from './itowns_constants';
 
 class LayerList extends EventEmitter {
     constructor(store, action) {
@@ -103,8 +103,10 @@ class LayerList extends EventEmitter {
 
         this.layerSelect.on(Select.EVENT_CHANGE, (err, evt) => {
             const value = this.layerSelect.getSelectedValue();
-            const isDisableDelete = this.store.getLayerData(value).type === "user";
+            const layerData = this.store.getLayerData(value);
+            const isDisableDelete = layerData.type === "user";
             this.layerDeleteButton.getDOM().disabled = isDisableDelete;
+            this.action.selectLayer({ id : layerData.id });
             this.emit(LayerList.EVENT_LAYER_SELECT_CHANGED, null, {
                 index : this.layerSelect.getSelectedIndex(),
                 value : value
@@ -118,7 +120,20 @@ class LayerList extends EventEmitter {
         for (let i = 0; i < layerDatas.length; ++i) {
             let data = layerDatas[i];
             if (data) {
-                this.layerSelect.addOption(data.id, data.id + " - " + data.type);
+                let type = data.type;
+                if (data.isBarGraph) {
+                    type = ITownsConstants.TypeBargraph;
+                }
+                if (data.isOBJ) {
+                    type = ITownsConstants.TypeOBJ;
+                }
+                if (data.isTimeseriesPotree) {
+                    type = ITownsConstants.TypePointCloudTimeSeries;
+                }
+                if (data.isTimeseriesC3DTiles) {
+                    type = ITownsConstants.Type3DTilesTimeSeries;
+                }
+                this.layerSelect.addOption(data.id, data.id + " - " + type);
             }
         }
     }

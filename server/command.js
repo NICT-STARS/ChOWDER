@@ -9,7 +9,7 @@
 (()=>{
 	"use strict";
 
-	let Command = {
+	const Command = {
 		// request command
 		AddContent : "AddContent",
 		AddTileContent : "AddTileContent",
@@ -24,6 +24,10 @@
 		GetWindowMetaData : "GetWindowMetaData",
 		GetVirtualDisplay : "GetVirtualDisplay",
 		GetGroupList : "GetGroupList",
+		UploadTileimage : "UploadTileimage",
+		GetLoginUserList : "GetLoginUserList",
+		GetSelfStatus : "GetSelfStatus",
+		UpdateLoginUserControllerID : "UpdateLoginUserControllerID",
 
 		// using both server and client
 		Update : "Update",
@@ -81,6 +85,8 @@
 		DeleteDisplayPermissionList : "DeleteDisplayPermissionList",
 
 		GetDisplayPermissionList : "GetDisplayPermissionList", // 許可設定一覧をサーバに要求する
+
+		Upload : "Upload",
 	};
 
 	module.exports = Command;

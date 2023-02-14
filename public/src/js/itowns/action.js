@@ -3,8 +3,6 @@
  * Copyright (c) 2016-2018 RIKEN Center for Computational Science. All rights reserved.
  */
 
-"use strict";
-
 class Action extends EventEmitter
 {
     constructor()
@@ -85,6 +83,14 @@ class Action extends EventEmitter
     }
 
     /**
+     * レイヤーの選択
+     * @param {*} data 
+     */
+    selectLayer(data) {
+        this.emit(Action.EVENT_SELECT_LAYER, null, data);
+    }
+
+    /**
      * レイヤーの削除
      * @param {*} data 
      */
@@ -134,13 +140,27 @@ class Action extends EventEmitter
      * コンテンツに対する時刻の変更
      * @param data
      * {
-     *    time : 時刻を表すDateインスタンス
+     *    currentTime : 時刻を表すDateインスタンス
      * }
      */
     changeTime(data) {
         this.emit(Action.EVENT_CHANGE_TIME, null, data);
     }
     
+    /**
+     * コンテンツに対する時刻の変更(GUIを使用して変更した場合)
+     * 同時に複数のパラメータが変化したりする
+     * @param data
+     * {
+     *    currentTime: new Date(pTimeInfo.currentTime),
+     *    startTime: new Date(pTimeInfo.startTime),
+     *    endTime: new Date(pTimeInfo.endTime)
+     * }
+     */
+    changeTimeByTimeline(data) {
+        this.emit(Action.EVENT_CHANGE_TIME_BY_TIMELINE, null, data);
+    }
+
     /**
      * パフォーマンス計測命令の発行
      */
@@ -149,10 +169,53 @@ class Action extends EventEmitter
     }
 
     /**
-     * タイムラインのレンジを変更
+     * タイムラインのレンジ(start, end)を変更
+     * @param {*} data 
+     * {
+     *   start: Date,
+     *   end : Date
+     * }
      */
     changeTimelineRange(data) {
         this.emit(Action.EVENT_CHANGE_TIMELINE_RANGE, null, data);
+    }
+
+    /**
+     * タイムラインのレンジバー(rangeStartTime, rangeEndTime)を変更
+     * @param {*} data 
+     * {
+     *   rangeStartTime: Date,
+     *   rangeEndTime : Date
+     * }
+     * または {} (レンジバー非表示の場合)
+     */
+    changeTimelineRangeBar(data) {
+        this.emit(Action.EVENT_CHANGE_TIMELINE_RANGE_BAR, null, data);
+    }
+
+
+    /**
+     * タイムラインの同期設定の変更
+     * @param {*} data 
+     * {
+     *    "sync" : true または false
+     * }
+     */
+    changeTimelineSync(data) {
+        this.emit(Action.EVENT_CHANGE_TIMELINE_SYNC, null, data);
+    }
+    
+    /**
+     * タイムラインの同期設定の変更
+     * @param {*} data 
+     * {
+     *    "filename" : ファイル名,
+     *    "type" : アップロードタイプ(ITownsConstants.UploadType~),
+     *    "binary" :ArrayBuffer
+     * }
+     */
+    upload(data) {
+        this.emit(Action.EVENT_UPLOAD, null, data);
     }
 }
 
@@ -163,6 +226,7 @@ Action.EVENT_LOGOUT = "logout";
 Action.EVENT_RESIZE_WINDOW = "resizeWindow";
 Action.EVENT_ADD_CONTENT = "addContent";
 Action.EVENT_ADD_LAYER = "addLayer";
+Action.EVENT_SELECT_LAYER = "selectLayer";
 Action.EVENT_DELETE_LAYER = "deleteLayer";
 Action.EVENT_CHANGE_LAYER_ORDER = "changeLayerOrder";
 Action.EVENT_UPDATE_CAMERA = "updateCamera";
@@ -170,6 +234,10 @@ Action.EVENT_CHANGE_LAYER_PROPERTY = "changeLayerProperty";
 Action.EVENT_FETCH_CONTENTS = "fetchContents";
 Action.EVENT_LOAD_USER_DATA = "loadUserData";
 Action.EVENT_CHANGE_TIME = "changeTime";
+Action.EVENT_CHANGE_TIME_BY_TIMELINE = "changeTimeByTimeline";
 Action.EVENT_CHANGE_TIMELINE_RANGE = "changeTimelineRange";
+Action.EVENT_CHANGE_TIMELINE_RANGE_BAR = "changeTimelineRangeBar";
 Action.EVENT_MEASURE_PERFORMANCE = "measurePerformance";
+Action.EVENT_CHANGE_TIMELINE_SYNC = "changeTimelineSync";
+Action.EVENT_UPLOAD = "upload";
 export default Action;

@@ -3,17 +3,59 @@
  * Copyright (c) 2016-2018 RIKEN Center for Computational Science. All rights reserved.
  */
 
-"use strict";
-
 // chowder_itowns_injectionで1jsにeventemitterもまとめたいので、このファイルでは直接importする
 import EventEmitter from '../../../3rd/js/eventemitter3/index.js'
 import Action from './action'
 import IFrameConnector from '../common/iframe_connector'
 import ITownsCommand from '../common/itowns_command';
 import ITownsConstants from '../itowns/itowns_constants.js';
+import CraeteBarGraphLayer from './bargraph_layer.js';
+import CreateOBJLayer from './obj_layer.js';
+import CreateTimescalePotreeLayer from './timeseries_potree_layer.js';
+import CreateTimescaleC3DTilesLayer from './timeseries_c3dtiles_layer.js';
+import C3DTileUtil from './c3dtile_util.js';
 
-const getTextureFloat = function getTextureFloat(buffer) {
-    return new itowns.THREE.DataTexture(buffer, 256, 256, itowns.THREE.AlphaFormat, itowns.THREE.FloatType);
+const getTextureFloat = (buffer, view) => {
+    // webgl2
+    if (view.mainLoop.gfxEngine.renderer.capabilities.isWebGL2) {
+        const texture = new itowns.THREE.DataTexture(buffer, 256, 256, itowns.THREE.RedFormat, itowns.THREE.FloatType);
+        texture.internalFormat = 'R32F';
+        return texture;
+    } else {
+        // webgl1
+        return new itowns.THREE.DataTexture(buffer, 256, 256, itowns.THREE.AlphaFormat, itowns.THREE.FloatType);
+    }
+};
+
+function checkResponse(response) {
+    if (!response.ok) {
+        let error = new Error(`Error loading ${response.url}: status ${response.status}`);
+        error.response = response;
+        throw error;
+    }
+}
+
+function fetchText(url, options = {}) {
+    return fetch(url, options).then((response) => {
+        checkResponse(response);
+        return response.text();
+    });
+}
+
+const isTimeseriesPotreeLayer = (layer) => {
+    return layer.hasOwnProperty('isTimeseriesPotree') && layer.isTimeseriesPotree;
+};
+
+const isTimeseriesC3DTilesLayer = (layer) => {
+    return layer.hasOwnProperty('isTimeseriesC3DTiles') && layer.isTimeseriesC3DTiles;
+};
+
+const isBarGraphLayer = (layer) => {
+    return layer.hasOwnProperty('isBarGraph') && layer.isBarGraph;
+};
+
+const isOBJLayer = (layer) => {
+    return layer.hasOwnProperty('isOBJ') && layer.isOBJ;
 };
 
 /**
@@ -31,6 +73,12 @@ class Store extends EventEmitter {
 
         this.itownsView = null;
         this.itownsViewerDiv = null;
+
+        this.BarGraphExtent = new itowns.Extent('EPSG:4326', 0, 0, 0);
+
+        this.date = null;
+
+        itowns.proj4.defs("EPSG:2446", "+proj=tmerc +lat_0=33 +lon_0=133.5 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
     }
 
     // デバッグ用. release版作るときは消す
@@ -84,7 +132,7 @@ class Store extends EventEmitter {
             this.iframeConnector.sendResponse(request);
         });
         this.iframeConnector.on(ITownsCommand.InitLayers, (err, param, request) => {
-            // レイヤー追加命令
+            // レイヤー初期化命令
             this.initLayers(param);
             // メッセージの返信
             this.iframeConnector.sendResponse(request);
@@ -136,12 +184,6 @@ class Store extends EventEmitter {
         this.itownsView.camera.camera3D.matrixAutoUpdate = true;
 
         this.itownsView.notifyChange(this.itownsView.camera.camera3D);
-
-        if (window.chowder_itowns_view_type === "controller") {
-            for (let i = 0; i < window.resizeListeners.length; ++i) {
-                window.resizeListeners[i]();
-            }
-        }
     }
 
     resizeToThumbnail(srcCanvas) {
@@ -171,28 +213,68 @@ class Store extends EventEmitter {
     }
 
     /**
+     * chowder側で独自にisBarGraphフラグを設定した、BarGraphLayerを返す
+     */
+    getBarGraphLayers() {
+        let res = [];
+        let layers = this.itownsView.getLayers();
+        for (let i = 0; i < layers.length; ++i) {
+            if (isBarGraphLayer(layers[i])) {
+                res.push(layers[i]);
+            }
+        }
+        return res;
+    }
+
+    /**
+     * chowder側で独自にisOBJフラグを設定した、OBJLayerを返す
+     */
+    getOBJLayers() {
+        let res = [];
+        let layers = this.itownsView.getLayers();
+        for (let i = 0; i < layers.length; ++i) {
+            if (isOBJLayer(layers[i])) {
+                res.push(layers[i]);
+            }
+        }
+        return res;
+    }
+
+    /**
+     * chowder itowns appの時系列表示に対応したLayerを返す
+     */
+    getTimescaleLayers() {
+        let res = [];
+        let layers = this.itownsView.getLayers();
+        for (let i = 0; i < layers.length; ++i) {
+            if (isBarGraphLayer(layers[i]) ||
+                isTimeseriesPotreeLayer(layers[i]) ||
+                isTimeseriesC3DTilesLayer(layers[i])) {
+                res.push(layers[i]);
+            }
+        }
+        return res;
+    }
+
+    getSelectedLayer() {
+        let layers = this.itownsView.getLayers();
+        for (let i = 0; i < layers.length; ++i) {
+            if (layers[i].isSelected === true) {
+                return layers[i];
+            }
+        }
+        return null;
+    }
+
+    /**
      * 地理院DEMのtxt用fetcher/parsarを,mapSourceに設定する.
      * @param {*} mapSource 
      */
     installCSVElevationParsar(mapSource) {
         console.log("installCSVElevationParsar");
-        function checkResponse(response) {
-            if (!response.ok) {
-                let error = new Error(`Error loading ${response.url}: status ${response.status}`);
-                error.response = response;
-                throw error;
-            }
-        }
 
-        let text = function (url, options = {}) {
-            return fetch(url, options).then((response) => {
-                checkResponse(response);
-                return response.text();
-            });
-        };
-
-        mapSource.fetcher = function (url, options = {}) {
-            return text(url, options).then((data) => {
+        mapSource.fetcher = function(url, options = {}) {
+            return fetchText(url, options).then((data) => {
                 let LF = String.fromCharCode(10);
                 let lines = data.split(LF);
                 let heights = [];
@@ -207,7 +289,7 @@ class Store extends EventEmitter {
                     }
                 }
                 let floatArray = new Float32Array(heights);
-                let texture = getTextureFloat(floatArray);
+                let texture = getTextureFloat(floatArray, this.itownsView);
                 return texture;
             });
         };
@@ -220,6 +302,7 @@ class Store extends EventEmitter {
     installPNGElevationParsar(mapSource) {
         console.log("installPNGElevationParsar");
         let textureLoader = new itowns.THREE.TextureLoader();
+
         function texture(url, options = {}) {
             let res;
             let rej;
@@ -228,7 +311,7 @@ class Store extends EventEmitter {
                 res = resolve;
                 rej = reject;
             });
-            textureLoader.load(url, res, () => { }, rej);
+            textureLoader.load(url, res, () => {}, rej);
             return promise;
         }
         let canvas = document.createElement("canvas");
@@ -263,11 +346,11 @@ class Store extends EventEmitter {
             }
             return heights;
         }
-        mapSource.fetcher = function (url, options = {}) {
-            return texture(url, options).then(function (tex) {
+        mapSource.fetcher = (url, options = {}) => {
+            return texture(url, options).then((tex) => {
                 let floatArray = convertTexToArray(tex);
                 let float32Array = new Float32Array(floatArray);
-                let tt = getTextureFloat(float32Array);
+                let tt = getTextureFloat(float32Array, this.itownsView);
                 return tt;
             });
         };
@@ -279,6 +362,7 @@ class Store extends EventEmitter {
      */
     createLayerByType(config, type) {
         console.log("createLayerByType", config, type)
+
         /*
         class TestSource extends itowns.TMSSource {
             constructor(source) {
@@ -301,7 +385,7 @@ class Store extends EventEmitter {
         }
         if (type === ITownsConstants.TypeElevation) {
             let mapSource = new itowns.TMSSource(config);
-            if (config.format === "image/x-bil;bits=32" || config.format === "wmts") {
+            if (config.format === "image/x-bil;bits=32" || (config.hasOwnProperty('tileMatrixSet') && config.url.indexOf('?LAYER=') > 0)) {
                 config.name = config.id;
                 mapSource = new itowns.WMTSSource(config);
             } else if (config.format === "csv" || config.format === "txt") {
@@ -309,19 +393,66 @@ class Store extends EventEmitter {
             } else if (config.format.indexOf("png") >= 0) {
                 this.installPNGElevationParsar(mapSource);
             }
-            return new itowns.ElevationLayer(config.id, {
-                source: mapSource,
-                updateStrategy: {
-                    type: 3
-                },
-                scale: 1
-            });
+            if (config.hasOwnProperty('tileMatrixSet') && config.tileMatrixSet === "iTowns") {
+                return new itowns.ElevationLayer(config.id, {
+                    source: mapSource,
+                    updateStrategy: {
+                        type: 3
+                    },
+                    useColorTextureElevation: true,
+                    colorTextureElevationMinZ: 37,
+                    colorTextureElevationMaxZ: 248,
+                    scale: 1
+                });
+            } else {
+                return new itowns.ElevationLayer(config.id, {
+                    source: mapSource,
+                    updateStrategy: {
+                        type: 3
+                    },
+                    scale: 1
+                });
+            }
         }
         if (type === ITownsConstants.TypePointCloud) {
-            return new itowns.PointCloudLayer(config.id, config, this.itownsView);
+            config.crs = this.itownsView.referenceCrs;
+            const layer = new itowns.PotreeLayer(config.id, {
+                source: new itowns.PotreeSource(config)
+            });
+            return layer;
+        }
+        if (type === ITownsConstants.TypePointCloudTimeSeries) {
+            config.crs = this.itownsView.referenceCrs;
+            return CreateTimescalePotreeLayer(this.itownsView, config);
+        }
+        if (type === ITownsConstants.Type3DTilesTimeSeries) {
+            config.crs = this.itownsView.referenceCrs;
+            return CreateTimescaleC3DTilesLayer(this.itownsView, config);
         }
         if (type === ITownsConstants.Type3DTile) {
-            return new itowns.C3DTilesLayer(config.id, config, this.itownsView);
+            const layer = new itowns.C3DTilesLayer(config.id, config, this.itownsView);
+            layer.defineLayerProperty('scale', 1.0, () => {
+                const scaleValue = layer.scale;
+                layer.object3d.scale.set(scaleValue, scaleValue, scaleValue);
+                layer.object3d.updateMatrixWorld();
+            });
+
+            if (config.hasOwnProperty('conversion')) {
+                layer.defineLayerProperty('conversion', config.conversion, () => {
+                    // not implemented
+                });
+
+                // EPSGによる座標変換の設定
+                C3DTileUtil.applyConvertSetting(layer, config);
+
+            }
+            return layer;
+        }
+        if (type === ITownsConstants.TypeBargraph) {
+            return CraeteBarGraphLayer(this.itownsView, config);
+        }
+        if (type === ITownsConstants.TypeOBJ) {
+            return CreateOBJLayer(this.itownsView, config);
         }
         if (type === ITownsConstants.TypeGeometry || config.format === "pbf") {
             let mapSource = null;
@@ -339,12 +470,12 @@ class Store extends EventEmitter {
                     }),
                     source: mapSource
                 });
-            }
-            else if (config.format === "pbf") {
+            } else if (config.format === "pbf") {
                 // Add a vector tile layer
                 function inter(z) {
                     return z - (z % 5);
                 }
+
                 function isValidData(data, extentDestination) {
                     const isValid = inter(extentDestination.zoom) == inter(data.extent.zoom);
                     return isValid;
@@ -389,7 +520,7 @@ class Store extends EventEmitter {
         let config = {};
         if (type === ITownsConstants.TypeColor) {
             config = {
-                "projection": "EPSG:3857",
+                "crs": "EPSG:3857",
                 "isInverted": true,
                 "format": "image/png",
                 "url": url,
@@ -402,27 +533,30 @@ class Store extends EventEmitter {
         }
         if (type === ITownsConstants.TypeElevation) {
             config = {
-                "projection": "EPSG:4326",
-                "tileMatrixSet": "WGS84G",
-                "format" : params.hasOwnProperty('format') ? params.format : "wmts",
+                "crs": "EPSG:4326",
+                "tileMatrixSet": params.hasOwnProperty('tileMatrixSet') ? params.tileMatrixSet : "WGS84G",
+                "format": params.hasOwnProperty('format') ? params.format : "image/x-bil;bits=32",
                 "url": url,
                 "scale": 1
             };
             if (url.indexOf('.png') > 0) {
                 // 地理院
                 config.format = "image/png";
-                config.projection = "EPSG:3857";
+                config.crs = "EPSG:3857";
                 config.tileMatrixSet = "PM";
             }
             if (url.indexOf('.txt') > 0 || url.indexOf('.csv') > 0) {
                 // 地理院
                 config.format = "csv"
-                config.projection = "EPSG:3857";
+                config.crs = "EPSG:3857";
                 config.tileMatrixSet = "PM";
             }
-            
+            if (params.hasOwnProperty('style')) {
+                config.style = params.style;
+            }
         }
-        if (type === ITownsConstants.TypePointCloud) {
+        if (type === ITownsConstants.TypePointCloud ||
+            type === ITownsConstants.TypePointCloudTimeSeries) {
             if (params.hasOwnProperty('file')) {
                 url += params.file;
             }
@@ -435,21 +569,44 @@ class Store extends EventEmitter {
                 "protocol": 'potreeconverter'
             };
         }
-        if (type === ITownsConstants.Type3DTile) {
+        if (type === ITownsConstants.Type3DTile ||
+            type === ITownsConstants.Type3DTilesTimeSeries) {
             config = {
                 "name": params.hasOwnProperty('id') ? params.id : "3dtile",
-                "url": url
+                "source": new itowns.C3DTilesSource({
+                    "url": url
+                }),
+                overrideMaterials: false
             };
-            if (params.hasOwnProperty('sseThreshold')) {
-                config.sseThreshold = params.sseThreshold;
+            if (params.hasOwnProperty('conversion')) {
+                config.conversion = JSON.parse(JSON.stringify(params.conversion));
             }
-            if (params.hasOwnProperty('wireframe')) {
-                config.wireframe = params.wireframe;
+        }
+        if (type === ITownsConstants.TypeBargraph) {
+            config = {
+                "crs": "EPSG:3857",
+                "isUserData": true,
+                "opacity": 1.0,
+                "url": url,
+            };
+            if (params.hasOwnProperty('jsonurl')) {
+                config.jsonurl = params.jsonurl;
+            }
+        }
+        if (type === ITownsConstants.TypeOBJ) {
+            config = {
+                "crs": "EPSG:4978",
+                "isUserData": true,
+                "opacity": 1.0,
+                "url": url,
+            };
+            if (params.hasOwnProperty('mtlurl')) {
+                config.mtlurl = params.mtlurl;
             }
         }
         if (url && url.indexOf('.geojson') >= 0) {
             config = {
-                "projection": "EPSG:3857",
+                "crs": "EPSG:3857",
                 "tileMatrixSet": "PM",
                 "url": url
             }
@@ -460,7 +617,7 @@ class Store extends EventEmitter {
         }
         if (url && url.indexOf('.pbf') >= 0) {
             config = {
-                "projection": "EPSG:3857",
+                "crs": "EPSG:3857",
                 "tileMatrixSet": "PM",
                 "url": url
             }
@@ -479,8 +636,17 @@ class Store extends EventEmitter {
         if (params.hasOwnProperty('format')) {
             config.format = params.format;
         }
-        if (params.hasOwnProperty('opacity')) {
-            config.opacity = params.opacity;
+        if (params.hasOwnProperty('attribution')) {
+            config.attribution = params.attribution;
+        }
+        if (params.hasOwnProperty('sseThreshold')) {
+            config.sseThreshold = params.sseThreshold;
+        }
+        if (params.hasOwnProperty('wireframe')) {
+            config.wireframe = params.wireframe;
+        }
+        if (params.hasOwnProperty('pointSize')) {
+            config.pointSize = params.pointSize;
         }
         return config;
     }
@@ -495,7 +661,7 @@ class Store extends EventEmitter {
      *   format : "image/png"など (option)
      * }
      */
-    addLayer(params) {
+    addLayer(params, withoutApplyParams = false) {
         if (!params) {
             console.error("Not found params");
             return;
@@ -517,13 +683,49 @@ class Store extends EventEmitter {
         if (params.hasOwnProperty('type')) {
             type = params.type;
         }
+        if (params.hasOwnProperty('isBarGraph') && params.isBarGraph) {
+            type = ITownsConstants.TypeBargraph;
+        }
+        if (params.hasOwnProperty('isTimeseriesPotree') && params.isTimeseriesPotree) {
+            type = ITownsConstants.TypePointCloudTimeSeries;
+        }
+        if (params.hasOwnProperty('isTimeseriesC3DTiles') && params.isTimeseriesC3DTiles) {
+            type = ITownsConstants.Type3DTilesTimeSeries;
+        }
+        if (params.hasOwnProperty('isOBJ') && params.isOBJ) {
+            type = ITownsConstants.TypeOBJ;
+        }
         let config = this.createLayerConfigByType(params, type);
         let layer = this.createLayerByType(config, type);
-        if (type === ITownsConstants.TypePointCloud ||
-            type === ITownsConstants.Type3DTile) {
-            itowns.View.prototype.addLayer.call(this.itownsView, layer);
-        } else {
-            this.itownsView.addLayer(layer);
+        if (layer) {
+            // 生成時に反映されないレイヤープロパティは、生成後に反映させる
+            if (!withoutApplyParams) {
+                if (params.hasOwnProperty('opacity')) {
+                    layer.opacity = params.opacity;
+                }
+                if (params.hasOwnProperty('visible')) {
+                    layer.visible = Boolean(params.visible);
+                }
+                if (params.hasOwnProperty('bbox')) {
+                    layer.bboxes.visible = Boolean(params.bbox);
+                }
+            }
+            if (type === ITownsConstants.TypePointCloud ||
+                type === ITownsConstants.TypePointCloudTimeSeries ||
+                type === ITownsConstants.Type3DTile ||
+                type === ITownsConstants.Type3DTilesTimeSeries ||
+                type === ITownsConstants.TypeBargraph ||
+                type === ITownsConstants.TypeOBJ) {
+                itowns.View.prototype.addLayer.call(this.itownsView, layer);
+
+                if (type === ITownsConstants.TypeBargraph) {
+                    layer.whenReady.then(() => {
+                        layer.updateBarGraph();
+                    })
+                }
+            } else {
+                this.itownsView.addLayer(layer);
+            }
         }
     }
 
@@ -533,17 +735,25 @@ class Store extends EventEmitter {
      * @param {*} layerList 
      */
     initLayers(layerList) {
+        // console.log("layerList", layerList)
+        // 特殊なレイヤー以外削除
+        this.isStopDispatchRemoveEvent = true;
         for (let i = this.layerDataList.length - 1; i >= 0; --i) {
             if (this.layerDataList[i].type === ITownsConstants.TypeUser) {
                 continue;
             } else {
                 const id = this.layerDataList[i].id;
-                let layer = this.getLayer(id);
-                if (layer) {
-                    this.itownsView.removeLayer(id);
+                if ((this.layerDataList[i].hasOwnProperty('url') && this.layerDataList[i].url !== "none") ||
+                    (this.layerDataList[i].hasOwnProperty('file') && this.layerDataList[i].file)) {
+                    let layer = this.getLayer(id);
+                    if (layer) {
+                        this.itownsView.removeLayer(id);
+                    }
                 }
             }
         }
+        this.isStopDispatchRemoveEvent = false;
+        // レイヤーの追加
         for (let i = 0; i < layerList.length; ++i) {
             if (layerList[i].type === ITownsConstants.TypeUser) {
                 let src = layerList[i];
@@ -552,9 +762,20 @@ class Store extends EventEmitter {
                 dst.visible = src.visible;
                 dst.opacity = src.opacity;
             } else {
-                this.addLayer(layerList[i]);
+                this.addLayer(layerList[i], true);
             }
         }
+        const initializeOneTime = () => {
+            for (let i = 0; i < layerList.length; ++i) {
+                this.changeLayerProperty(layerList[i])
+            }
+
+            this.iframeConnector.send(ITownsCommand.LayersInitialized, {}, function() {});
+            this.itownsView.removeEventListener('layers-initialized', initializeOneTime);
+        }
+
+        // iTownsAppで保持しているパラメータを反映させる
+        this.itownsView.addEventListener('layers-initialized', initializeOneTime);
     }
 
     /**
@@ -581,10 +802,10 @@ class Store extends EventEmitter {
      *   isUp : 上に移動する場合はtrue、下の場合はfalse
      * }
      */
-    changeLayerOrder(params) {
+    async changeLayerOrder(params) {
         const id = params.id;
         const isUp = params.isUp ? true : false;
-        const validLayers = this.getLayerDataList();
+        const validLayers = await this.getLayerDataList();
         const targetLayer = this.getLayer(id);
         if (targetLayer) {
             for (let i = 0; i < this.itownsView._layers.length; ++i) {
@@ -596,18 +817,18 @@ class Store extends EventEmitter {
                     if (attachedIndex >= 0) {
                         // attachedLayerを移動したい
                         // "attachedLayers"内で移動を試みる
-                        if (isUp
-                            && attachedIndex > 0
-                            && validLayers.indexOf(attachedLayers[i]) >= 0) // 入れ替え先レイヤーが有効かどうか
+                        if (isUp &&
+                            attachedIndex > 0 &&
+                            validLayers.indexOf(attachedLayers[i]) >= 0) // 入れ替え先レイヤーが有効かどうか
                         {
                             console.log("up!", this.itownsView, id)
                             itowns.ColorLayersOrdering.moveLayerUp(this.itownsView, id);
                             attachedLayers.splice(i - 1, 2, attachedLayers[i], attachedLayers[i - 1]);
                             this.itownsView.dispatchEvent({ type: itowns.VIEW_EVENTS.COLOR_LAYERS_ORDER_CHANGED });
                             this.itownsView.notifyChange();
-                        } else if (!isUp
-                            && attachedIndex < (attachedLayers.length - 1)
-                            && validLayers.indexOf(attachedLayers[i + 1]) >= 0) // 入れ替え先レイヤーが有効かどうか) 
+                        } else if (!isUp &&
+                            attachedIndex < (attachedLayers.length - 1) &&
+                            validLayers.indexOf(attachedLayers[i + 1]) >= 0) // 入れ替え先レイヤーが有効かどうか) 
                         {
                             console.log("moveLayerDown", i, i + 1)
                             itowns.ColorLayersOrdering.moveLayerDown(this.itownsView, id);
@@ -642,11 +863,46 @@ class Store extends EventEmitter {
      *   visible : 表示非表示.表示の場合true(option)
      * }
      */
-    changeLayerProperty(params) {
+    changeLayerProperty(params, redraw = true) {
         let id = params.id;
         let layer = this.getLayer(id);
+        if (!layer.ready) {
+            console.warn("layer is not ready")
+            return;
+        }
         let isChanged = false;
         if (layer) {
+            let isUpdateSource = false;
+            if (params.hasOwnProperty('url') &&
+                layer.hasOwnProperty('source') &&
+                layer.source.hasOwnProperty('url')) {
+                // URLが違う場合はソース更新
+                isUpdateSource = isUpdateSource || (params.url !== layer.source.url);
+                // update_idが違う場合はソース更新
+                isUpdateSource = isUpdateSource || (params.update_id !== layer.update_id);
+            }
+            if (isUpdateSource) {
+                if (layer.source instanceof itowns.C3DTilesSource) {
+                    this.itownsView.removeLayer(layer.id);
+                    let config = this.createLayerConfigByType(params, params.type);
+                    config.source = new itowns.C3DTilesSource({
+                        "url": params.url
+                    });
+                    layer = new itowns.C3DTilesLayer(layer.id, config, this.itownsView);
+                    itowns.View.prototype.addLayer.call(this.itownsView, layer);
+                }
+                if (layer.isOBJ) {
+                    this.itownsView.removeLayer(layer.id);
+                    let config = this.createLayerConfigByType(params, params.type);
+                    layer = CreateOBJLayer(this.itownsView, config);
+                    itowns.View.prototype.addLayer.call(this.itownsView, layer);
+                }
+                isChanged = true;
+            }
+            if (params.hasOwnProperty('update_id')) {
+                layer.update_id = params.update_id;
+                isChanged = true;
+            }
             if (params.hasOwnProperty('opacity')) {
                 layer.opacity = Number(params.opacity);
                 isChanged = true;
@@ -660,7 +916,11 @@ class Store extends EventEmitter {
                 isChanged = true;
             }
             if (params.hasOwnProperty('scale')) {
-                layer.scale = Number(params.scale);
+                layer.scale = params.scale;
+                isChanged = true;
+            }
+            if (params.hasOwnProperty('size')) {
+                layer.size = Number(params.size);
                 isChanged = true;
             }
             if (params.hasOwnProperty('pointSize')) {
@@ -675,6 +935,14 @@ class Store extends EventEmitter {
                 layer.sseThreshold = Number(params.sseThreshold);
                 isChanged = true;
             }
+            if (params.hasOwnProperty('bargraphParams')) {
+                layer.bargraphParams = JSON.parse(JSON.stringify(params.bargraphParams));
+                isChanged = true;
+            }
+            if (params.hasOwnProperty('conversion')) {
+                layer.conversion = JSON.parse(JSON.stringify(params.conversion));
+                isChanged = true;
+            }
             /*
             if (params.hasOwnProperty('pointBudget')) {
                 layer.pointBudget = Number(params.pointBudget);
@@ -682,91 +950,129 @@ class Store extends EventEmitter {
                 console.error("pointBudget", layer.pointBudget)
             }
             */
-            if ((params.hasOwnProperty('offset_xyz') 
-                || params.hasOwnProperty('offset_uvw')
-                || params.hasOwnProperty('offset_small_uv')) &&
-                layer.object3d && 
-                layer.object3d.children.length > 0) 
-            {
-                for (let i = 0; i < layer.object3d.children.length; ++i) {
-                    let target = layer.object3d.children[i];
-                    let initial_position = { x : 0, y : 0, z : 0 };
-                    let initial_quaternion = new itowns.THREE.Quaternion();
-                    if (target["initial_position"]) {
-                        initial_position = target.initial_position;
-                        initial_quaternion = target.initial_quaternion;
-                    } else {
-                        target.initial_position = target.position.clone();
-                        target.initial_quaternion = target.quaternion.clone();
-                    }
-                    let vec = target.initial_position.clone();
-                    if (vec.length() === 0) {
-                        if (layer.hasOwnProperty('root')) {
-                            vec = layer.root.bbox.min.clone()
+            if ((params.hasOwnProperty('offset_xyz') ||
+                    params.hasOwnProperty('offset_uvw') ||
+                    params.hasOwnProperty('offset_small_uv')) &&
+                layer.object3d) {
+
+                // layerからパラメータを取得できるように、layerに入れておく
+                if (params.hasOwnProperty('offset_xyz')) {
+                    layer.offset_xyz = JSON.parse(JSON.stringify(params.offset_xyz));
+                }
+                if (params.hasOwnProperty('offset_small_uv')) {
+                    layer.offset_small_uv = JSON.parse(JSON.stringify(params.offset_small_uv));
+                }
+                if (params.hasOwnProperty('offset_uvw')) {
+                    layer.offset_uvw = JSON.parse(JSON.stringify(params.offset_uvw));
+                }
+
+                let target = layer.object3d;
+
+                let initial_position = { x: 0, y: 0, z: 0 };
+                let initial_quaternion = new itowns.THREE.Quaternion();
+                if (target["initial_position"]) {
+                    initial_position = target.initial_position;
+                    initial_quaternion = target.initial_quaternion;
+                } else {
+                    target.initial_position = target.position.clone();
+                    target.initial_quaternion = target.quaternion.clone();
+                }
+                let vec = target.initial_position.clone();
+                if (vec.length() < 1.0e-6) {
+                    if (layer.root) {
+                        if (layer.root.hasOwnProperty('bbox')) {
+                            layer.root.bbox.getCenter(vec);
+                        }
+                        if (layer.root.hasOwnProperty('boundingVolume') && layer.root.boundingVolume.hasOwnProperty('box')) {
+                            layer.root.boundingVolume.box.getCenter(vec);
                         }
                     }
-
-                    vec.normalize();
-                    let u = vec.clone();
-                    u.cross(new itowns.THREE.Vector3(0, 1, 0));
-                    let v = vec.clone();
-                    v.cross(u);
-                    let w = vec.clone();
-
-                    let mw = { x : 0, y : 0, z : 0 };
-                    let xyz = { x : 0, y : 0, z : 0 };
-                    // position
-                    if (params.hasOwnProperty('offset_xyz')) {
-                        xyz = params.offset_xyz;
-                    }
-                    if (params.hasOwnProperty('offset_uvw')) {
-                        w.multiplyScalar(params.offset_uvw.w * 100);
-                        mw = w;
-                    }
-                    let position = new itowns.THREE.Vector3(
-                        initial_position.x + xyz.x + mw.x,
-                        initial_position.y + xyz.y + mw.y,
-                        initial_position.z + xyz.z + mw.z
-                    );
-                    // rotation
-                    let quaternionTUV = new itowns.THREE.Quaternion();
-                    let quaternionUV = new itowns.THREE.Quaternion();
-                    if (params.hasOwnProperty('offset_small_uv')) {
-                        let quaternionTU = new itowns.THREE.Quaternion();
-                        let quaternionTV = new itowns.THREE.Quaternion();
-                        quaternionTU.setFromAxisAngle(u, params.offset_small_uv.u * Math.PI / 180.0 / 1.0e6);
-                        quaternionTV.setFromAxisAngle(v, params.offset_small_uv.v * Math.PI / 180.0 / 1.0e6);
-                        quaternionTUV.copy(quaternionTU);
-                        quaternionTUV.multiply(quaternionTV);
-                    }
-                    if (params.hasOwnProperty('offset_uvw')) {
-                        let quaternionU = new itowns.THREE.Quaternion();
-                        let quaternionV = new itowns.THREE.Quaternion();
-                        quaternionU.setFromAxisAngle(u, params.offset_uvw.u * Math.PI / 180.0);
-                        quaternionV.setFromAxisAngle(v, params.offset_uvw.v * Math.PI / 180.0);
-                        quaternionUV.copy(quaternionU);
-                        quaternionUV.multiply(quaternionV);
-                    }
-                    position.applyQuaternion(quaternionTUV)
-                    position.applyQuaternion(quaternionUV)
-                    target.matrixAutoUpdate = false;
-                    target.position.copy(position);
-                    target.quaternion.copy(initial_quaternion);
-                    target.quaternion.multiply(quaternionTUV);
-                    target.quaternion.multiply(quaternionUV);
-                    target.updateMatrix();
-                    target.updateMatrixWorld();
-                    target.matrixAutoUpdate = true;
-                    isChanged = true;
                 }
+
+                vec.normalize();
+                let u = vec.clone();
+                u.cross(new itowns.THREE.Vector3(0, 0, 1));
+                let v = vec.clone();
+                v.cross(u);
+                let w = vec.clone();
+                w.normalize();
+
+                if (vec.length() < 1.0e-6) {
+                    vec = new itowns.THREE.Vector3(0, 0, 1);
+                    u = vec.clone();
+                    u.cross(new itowns.THREE.Vector3(1, 0, 0));
+                    v = vec.clone();
+                    v.cross(u);
+                    w = vec.clone();
+                    w.normalize();
+                }
+
+                let mw = { x: 0, y: 0, z: 0 };
+                let xyz = { x: 0, y: 0, z: 0 };
+                // position
+                if (params.hasOwnProperty('offset_xyz')) {
+                    xyz = params.offset_xyz;
+                }
+                if (params.hasOwnProperty('offset_uvw')) {
+                    // w.multiplyScalar(params.offset_uvw.w * 100);
+                    // mw = w;
+                }
+                let position = new itowns.THREE.Vector3(
+                    initial_position.x + xyz.x + mw.x,
+                    initial_position.y + xyz.y + mw.y,
+                    initial_position.z + xyz.z + mw.z
+                );
+                // rotation
+                let quaternionTUV = new itowns.THREE.Quaternion();
+                let quaternionUVW = new itowns.THREE.Quaternion();
+                if (params.hasOwnProperty('offset_small_uv')) {
+                    let quaternionTU = new itowns.THREE.Quaternion();
+                    let quaternionTV = new itowns.THREE.Quaternion();
+                    quaternionTU.setFromAxisAngle(u, params.offset_small_uv.u * Math.PI / 180.0 / 1.0e6);
+                    quaternionTV.setFromAxisAngle(v, params.offset_small_uv.v * Math.PI / 180.0 / 1.0e6);
+                    quaternionTUV.copy(quaternionTU);
+                    quaternionTUV.multiply(quaternionTV);
+                }
+                if (params.hasOwnProperty('offset_uvw')) {
+                    let quaternionU = new itowns.THREE.Quaternion();
+                    let quaternionV = new itowns.THREE.Quaternion();
+                    let quaternionW = new itowns.THREE.Quaternion();
+                    quaternionU.setFromAxisAngle(u, params.offset_uvw.u * Math.PI / 180.0);
+                    quaternionV.setFromAxisAngle(v, params.offset_uvw.v * Math.PI / 180.0);
+                    quaternionW.setFromAxisAngle(w, params.offset_uvw.w * Math.PI / 180.0);
+                    quaternionUVW.copy(quaternionU);
+                    quaternionUVW.multiply(quaternionV);
+                    quaternionUVW.multiply(quaternionW);
+                }
+                position.applyQuaternion(quaternionTUV)
+                position.applyQuaternion(quaternionUVW)
+                target.matrixAutoUpdate = false;
+                target.position.copy(position);
+                target.quaternion.copy(initial_quaternion);
+                target.quaternion.multiply(quaternionTUV);
+                target.quaternion.multiply(quaternionUVW);
+                target.updateMatrix();
+                target.updateMatrixWorld();
+                target.matrixAutoUpdate = true;
+                isChanged = true;
             }
             if (isChanged) {
+                if (layer.isTimeseriesPotree) {
+                    layer.updateParams();
+                }
+                if (layer.isTimeseriesC3DTiles) {
+                    layer.updateParams();
+                }
+            }
+            if (isChanged && redraw) {
                 this.itownsView.notifyChange(layer);
             }
         }
     }
 
-    resizeWindow(rect) {
+    resizeWindow(param) {
+        const rect = param.rect;
+        const isSetOffset = param.isSetOffset;
         if (!rect) return;
         let width = document.body.clientWidth;
         let height = document.body.clientHeight;
@@ -774,22 +1080,119 @@ class Store extends EventEmitter {
         let fullHeight = height;
 
         document.body.style.pointerEvents = "none"
+        this.itownsViewerDiv.style.position = "relative";
         this.itownsViewerDiv.style.left = parseInt(rect.x) + "px";
         this.itownsViewerDiv.style.top = parseInt(rect.y) + "px";
-        this.itownsViewerDiv.style.width = parseInt(rect.w) + "px";
-        this.itownsViewerDiv.style.height = parseInt(rect.h) + "px";
-        this.itownsViewerDiv.style.position = "relative";
+        if (isSetOffset) {
+            this.itownsViewerDiv.style.width = parseInt(rect.w) + "px";
+            this.itownsViewerDiv.style.height = parseInt(rect.h) + "px";
+        } else {
+            this.itownsViewerDiv.style.width = "100%";
+            this.itownsViewerDiv.style.height = "100%";
+        }
         this.itownsView.camera.camera3D.setViewOffset(fullWidth, fullHeight, rect.x, rect.y, rect.w, rect.h)
-        //console.log(fullWidth, fullHeight, rect.x, rect.y, rect.w, rect.h)
         this.itownsView.mainLoop.gfxEngine.renderer.setSize(rect.w, rect.h);
+
+        if (window.chowder_itowns_view_type === "controller") {
+            for (let i = 0; i < window.resizeListeners.length; ++i) {
+                window.resizeListeners[i]();
+            }
+        }
+        let canvas = this.itownsViewerDiv.getElementsByTagName('canvas')[0];
+        if (canvas) {
+            canvas.style.width = "100%";
+            canvas.style.height = "100%";
+        }
         this.itownsView.notifyChange(this.itownsView.camera.camera3D);
     }
 
+    isViewReady() {
+        //const allReady = this.itownsView.getLayers().every(layer => layer.ready);
+        if ( //*allReady &&
+            this.itownsView.mainLoop.scheduler.commandsWaitingExecutionCount() == 0 &&
+            this.itownsView.mainLoop.renderingState == 0 /*RENDERING_PAUSED*/ ) {
+            return true;
+        }
+        return false;
+    }
 
     injectaAsChOWDERDisplayController(data) {
+        // Display, controllerはリサイズを弾く
+        window.removeEventListener("resize");
+
+        // 一定間隔同じイベントが来なかったら再描画するための関数
+        let debounceRedraw = (() => {
+            const interval = 500;
+            let timer;
+            let sumDT = 0.0;
+            return (func, view, dt) => {
+                sumDT += dt;
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                    if (this.isViewReady()) {
+                        func(view, sumDT);
+                        sumDT = 0.0;
+                    } else {
+                        debounceRedraw(func, view, sumDT);
+                    }
+                }, interval);
+            };
+        })();
+
+        let aspectForResize = 1.0
+
+        const getAspect = function(div) {
+            const rect = div.getBoundingClientRect();
+            return (rect.right - rect.left) / (rect.bottom - rect.top);
+        }
+
+        const debounceResize = (() => {
+            const interval = 500;
+            let timer;
+            return (func) => {
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                    let aspect = getAspect(this.itownsViewerDiv);
+                    if (Math.abs(aspectForResize - aspect) > 0.02) {
+                        aspectForResize = aspect;
+                        func();
+                        let canvas = this.itownsViewerDiv.getElementsByTagName('canvas')[0];
+                        if (canvas) {
+                            canvas.style.width = "100%";
+                            canvas.style.height = "100%";
+                        }
+                    }
+                }, interval);
+            };
+        })();
+
         // 初期化イベントに対する応答
         this.iframeConnector.on(ITownsCommand.Init, (err, param, request) => {
             this.iframeConnector.sendResponse(request);
+
+
+            // chowder controllerのみ、負荷を下げるため、頻繁に再描画させないようにする
+            // 具体的には、連続したredrawが発行された際に、最後に1回だけ実行するようにする。
+            if (window.chowder_itowns_view_type === "controller") {
+                const origRenderView = this.itownsView.mainLoop.__proto__._renderView.bind(this.itownsView.mainLoop);
+                this.itownsView.mainLoop.__proto__._renderView = function(view, dt) {
+                    debounceRedraw(origRenderView, view, dt);
+                }
+
+                // chowder controllerのみ、負荷を下げるため、初期の解像度を256,256固定とする
+                aspectForResize = getAspect(this.itownsViewerDiv);
+                let canvas = this.itownsViewerDiv.getElementsByTagName('canvas')[0];
+                if (canvas) {
+                    canvas.style.width = "100%";
+                    canvas.style.height = "100%";
+                }
+
+                const origResize = this.itownsView.__proto__.resize.bind(this.itownsView);
+                window.addEventListener("resize", (evt) => {
+                    debounceResize(origResize);
+                });
+
+            }
         });
 
         // time更新
@@ -798,17 +1201,31 @@ class Store extends EventEmitter {
                 console.error(err);
                 return;
             }
+            this.date = new Date(param.time);
             if (data.timeCallback) {
-                data.timeCallback(new Date(param.time));
+                data.timeCallback(this.date);
+            }
+            this.range = {}
+            if (param.hasOwnProperty('rangeStartTime') &&
+                param.hasOwnProperty('rangeEndTime') &&
+                param.rangeStartTime.length > 0 &&
+                param.rangeEndTime.length > 0) {
+                this.range = {
+                    rangeStartTime: new Date(param.rangeStartTime),
+                    rangeEndTime: new Date(param.rangeEndTime),
+                }
+            }
+            const layers = this.getTimescaleLayers();
+            if (layers.length > 0) {
+                for (let i = 0; i < layers.length; ++i) {
+                    layers[i].updateByTime(this.date, this.range);
+                }
+                this.itownsView.notifyChange();
             }
             this.iframeConnector.sendResponse(request);
         });
 
-        // Displayはリサイズを弾く
-        
         if (window.chowder_itowns_view_type === "display") {
-            window.removeEventListener("resize");
-
             // Displayのみ計測
             this.iframeConnector.on(ITownsCommand.MeasurePerformance, (err, param, request) => {
                 let before = 0;
@@ -816,7 +1233,7 @@ class Store extends EventEmitter {
                 let totalMillis = 0;
                 // パフォーマンス計測命令
                 let result = this.measurePerformance();
-    
+
                 let updateStart = () => {
                     if (frameCount === null) { return; }
                     before = Date.now();
@@ -828,12 +1245,12 @@ class Store extends EventEmitter {
                     if (frameCount >= 10) {
                         this.itownsView.removeFrameRequester(itowns.MAIN_LOOP_EVENTS.UPDATE_START, updateStart);
                         this.itownsView.removeFrameRequester(itowns.MAIN_LOOP_EVENTS.UPDATE_END, updateEnd);
-                        let updateDuration = Math.floor(totalMillis / frameCount);
-    
+                        let updateDuration = totalMillis / frameCount;
+
                         result.updateDuration = updateDuration;
                         // メッセージの返信
                         this.iframeConnector.sendResponse(request, result);
-    
+
                         frameCount = null; // invalid
                     } else {
                         this.itownsView.notifyChange();
@@ -843,20 +1260,26 @@ class Store extends EventEmitter {
                 this.itownsView.addFrameRequester(itowns.MAIN_LOOP_EVENTS.UPDATE_END, updateEnd);
                 this.itownsView.notifyChange();
             });
+
+            // VR用step更新
+            this.iframeConnector.on(ITownsCommand.StepForce, (err, param, request) => {
+                this.itownsView.mainLoop._step(this.itownsView, param.timestamp);
+                this.iframeConnector.sendResponse(request);
+            });
         }
     }
 
     // 操作可能なレイヤーのデータリストを返す
-    getLayerDataList() {
+    async getLayerDataList() {
         let layers = this.itownsView.getLayers();
         let i;
         let dataList = [];
-        let data = {}
         let layer;
         for (i = 0; i < layers.length; ++i) {
             layer = layers[i];
             if (!layer) continue;
-            data = {};
+            if (layer.isChildLayer) continue; // 時系列データ用の子レイヤーは除く
+            let data = {};
             if (layer.hasOwnProperty('bboxes')) {
                 data.bbox = layer.bboxes.visible;
             }
@@ -872,65 +1295,127 @@ class Store extends EventEmitter {
             if (layer.hasOwnProperty('sseThreshold')) {
                 data.sseThreshold = layer.sseThreshold;
             }
+            if (layer.hasOwnProperty('conversion')) {
+                data.conversion = JSON.parse(JSON.stringify(layer.conversion));
+            }
+            if (layer.hasOwnProperty('scale')) {
+                data.scale = layer.scale;
+            }
+            if (layer.hasOwnProperty('size')) {
+                data.size = layer.size;
+            }
+            if (layer.hasOwnProperty('offset_small_uv')) {
+                data.offset_small_uv = JSON.parse(JSON.stringify(layer.offset_small_uv));
+            }
+            if (layer.hasOwnProperty('offset_uvw')) {
+                data.offset_uvw = JSON.parse(JSON.stringify(layer.offset_uvw));
+            }
+            if (layer.hasOwnProperty('isBarGraph')) {
+                data.isBarGraph = layer.isBarGraph;
+                if (!layer.ready) {
+                    await layer.whenReady;
+                }
+                if (layer.hasOwnProperty('source') && layer.source._featuresCaches.hasOwnProperty(layer.crs)) {
+                    let loadedData = await layer.source.loadData(this.BarGraphExtent, layer);
+                    data.csv = loadedData.csv;
+                    if (loadedData.hasOwnProperty('initialBargraphParams')) {
+                        data.initialBargraphParams = loadedData.initialBargraphParams;
+                    }
+                }
+            }
+            if (layer.hasOwnProperty('isTimeseriesPotree')) {
+                data.isTimeseriesPotree = layer.isTimeseriesPotree;
+                if (!layer.ready) {
+                    await layer.whenReady;
+                }
+                let jsonData = await layer.source.loadData(layer.tempExtent, layer);
+                data.json = jsonData.json;
+            }
+            if (layer.hasOwnProperty('isTimeseriesC3DTiles')) {
+                data.isTimeseriesC3DTiles = layer.isTimeseriesC3DTiles;
+                if (!layer.ready) {
+                    await layer.whenReady;
+                }
+                let jsonData = await layer.source.loadData(layer.tempExtent, layer);
+                data.json = jsonData.json;
+            }
+            if (layer.hasOwnProperty('isOBJ')) {
+                data.isOBJ = layer.isOBJ;
+            }
             if (layer.hasOwnProperty('source') && layer.source.hasOwnProperty('format')) {
                 data.format = layer.source.format;
             }
-            if (
-                (layer.hasOwnProperty('source') && layer.source.hasOwnProperty('url')) ||
-                (layer.hasOwnProperty('file') && layer.hasOwnProperty('url')) ||
+            if (layer.hasOwnProperty('source') && layer.source.hasOwnProperty('attribution')) {
+                if (layer.source !== undefined) {
+                    data.attribution = layer.source.attribution;
+                }
+            }
+            data.type = (((layer) => {
+                if (layer.hasOwnProperty('isUserLayer') && layer.isUserLayer === true) {
+                    return ITownsConstants.TypeUser;
+                } else if (layer instanceof itowns.ColorLayer) {
+                    return ITownsConstants.TypeColor;
+                } else if (layer instanceof itowns.ElevationLayer) {
+                    return ITownsConstants.TypeElevation;
+                } else if (layer instanceof itowns.PotreeLayer) {
+                    return ITownsConstants.TypePointCloud;
+                } else if (layer.isTimeseriesPotree) {
+                    return ITownsConstants.TypePointCloudTimeSeries;
+                } else if (layer instanceof itowns.C3DTilesLayer) {
+                    return ITownsConstants.Type3DTile;
+                } else if (layer.isTimeseriesC3DTiles) {
+                    return ITownsConstants.Type3DTilesTimeSeries;
+                } else if (layer instanceof itowns.GeometryLayer || layer.isBarGraph || layer.isOBJ) {
+                    return ITownsConstants.TypeGeometry;
+                } else {
+                    return ITownsConstants.TypeUser;
+                }
+            })(layer));
+            data.visible = layer.visible;
+            data.crs = layer.crs;
+            data.id = layer.id;
+
+            if ((layer.hasOwnProperty('source') && layer.source.hasOwnProperty('url')) ||
+                (layer.hasOwnProperty('source') && layer.hasOwnProperty('file')) ||
                 (layer.hasOwnProperty('name') && layer.hasOwnProperty('url')) ||
                 (layer.hasOwnProperty('isUserLayer') && layer.isUserLayer === true)
             ) {
-                if (layer.hasOwnProperty('source') || layer.hasOwnProperty('file')) {
-                    data.visible = layer.visible;
-                    data.projection = layer.projection;
-                    data.id = layer.id;
-                    data.url = layer.hasOwnProperty('source') ? layer.source.url : layer.url;
-                    data.style = layer.hasOwnProperty('style') ? layer.source.style : undefined;
-                    data.zoom = layer.hasOwnProperty('source') ? layer.source.zoom : undefined;
-                    data.file = layer.hasOwnProperty('file') ? layer.file : undefined;
-                    data.type = (((layer) => {
-                        if (layer.hasOwnProperty('isUserLayer') && layer.isUserLayer === true) {
-                            return ITownsConstants.TypeUser;
-                        } else if (layer instanceof itowns.ElevationLayer) {
-                            return ITownsConstants.TypeElevation;
-                        } else if (layer instanceof itowns.ColorLayer) {
-                            return ITownsConstants.TypeColor;
-                        } else if (layer instanceof itowns.PointCloudLayer) {
-                            return ITownsConstants.TypePointCloud;
-                        } else if (layer instanceof itowns.C3DTilesLayer) {
-                            return ITownsConstants.Type3DTile;
-                        } else if (layer instanceof itowns.GeometryLayer) {
-                            return ITownsConstants.TypeGeometry;
-                        } else {
-                            return ITownsConstants.TypeUser;
-                        }
-                    })(layer));
-                    dataList.push(data);
+                if (layer.hasOwnProperty('source')) {
+                    if (data.hasOwnProperty('crs') && data.crs !== undefined && data.crs.indexOf('EPSG:') <= 0 && layer.source.extent) {
+                        data.crs = layer.source.extent.crs;
+                    }
+
+                    data.url = layer.source.hasOwnProperty('url') ? layer.source.url : layer.url;
+                    data.style = layer.source.hasOwnProperty('style') ? layer.source.style : undefined;
+                    data.mtlurl = layer.source.hasOwnProperty('mtlurl') ? layer.source.mtlurl : undefined;
+                    data.jsonurl = layer.source.hasOwnProperty('jsonurl') ? layer.source.jsonurl : undefined;
+                    data.file = layer.source.hasOwnProperty('file') ? layer.source.file : undefined;
+                    data.zoom = layer.source.hasOwnProperty('zoom') ? layer.source.zoom : undefined;
                 } else {
-                    data.visible = layer.visible;
-                    data.id = layer.id;
-                    data.name = layer.hasOwnProperty('name') ? layer.name : undefined;
-                    data.file = layer.hasOwnProperty('file') ? layer.file : undefined;
                     data.url = layer.hasOwnProperty('url') ? layer.url : undefined;
                     data.style = layer.hasOwnProperty('style') ? layer.style : undefined;
-                    data.type = (((layer) => {
-                        if (layer.hasOwnProperty('isUserLayer') && layer.isUserLayer === true) {
-                            return ITownsConstants.TypeUser;
-                        } else if (layer instanceof itowns.ColorLayer) {
-                            return ITownsConstants.TypeColor;
-                        } else if (layer instanceof itowns.PointCloudLayer) {
-                            return ITownsConstants.TypePointCloud;
-                        } else if (layer instanceof itowns.C3DTilesLayer) {
-                            return ITownsConstants.Type3DTile;
-                        } else if (layer instanceof itowns.GeometryLayer) {
-                            return ITownsConstants.TypeGeometry;
-                        } else {
-                            return ITownsConstants.TypeUser;
-                        }
-                    })(layer));
-                    dataList.push(data);
+                    data.mtlurl = layer.hasOwnProperty('mtlurl') ? layer.mtlurl : undefined;
+                    data.jsonurl = layer.hasOwnProperty('jsonurl') ? layer.jsonurl : undefined;
+                    data.file = layer.hasOwnProperty('file') ? layer.file : undefined;
+                    data.name = layer.hasOwnProperty('name') ? layer.name : undefined;
                 }
+
+                // WMTSの場合はURLに含まれているパラメータから各種パラメータを復元し
+                // URLはパラメータを含まない形にする
+                if (data.url.indexOf('?LAYER=') > 0) {
+                    const getParams = data.url.slice(data.url.indexOf('?LAYER='));
+                    let paramList = getParams.split('&');
+                    for (let k = 0; k < paramList.length; ++k) {
+                        if (paramList[k].indexOf('TILEMATRIXSET=') >= 0) {
+                            data.tileMatrixSet = paramList[k].slice(paramList[k].indexOf('=') + 1);
+                        } else if (paramList[k].indexOf('STYLE=') >= 0) {
+                            data.style = paramList[k].slice(paramList[k].indexOf('=') + 1);
+                        }
+                    }
+                    data.url = data.url.slice(0, data.url.indexOf('?LAYER='));
+                }
+
+                dataList.push(data);
             }
         }
         return dataList;
@@ -960,7 +1445,7 @@ class Store extends EventEmitter {
                         this.iframeConnector.send(ITownsCommand.AddContent, {
                             thumbnail: thumbnailBase64,
                             layerList: this.layerDataList
-                        }, function () {
+                        }, function() {
                             done = true;
                         });
                     }
@@ -974,6 +1459,8 @@ class Store extends EventEmitter {
                 this.iframeConnector.send(ITownsCommand.AddContent, {
                     thumbnail: thumbnailBase64,
                     layerList: this.layerDataList
+                }, function() {
+                    done = true;
                 });
                 done = true;
             }
@@ -1043,7 +1530,7 @@ class Store extends EventEmitter {
         return status;
     }
 
-    injectAsChOWDERiTownController(data) {
+    async injectAsChOWDERiTownController(data) {
         let menuDiv = document.getElementById('menuDiv');
         if (menuDiv) {
             menuDiv.style.position = "absolute";
@@ -1057,20 +1544,40 @@ class Store extends EventEmitter {
                 console.error(err);
                 return;
             }
+            this.date = new Date(param.time);
             if (data.timeCallback) {
-                data.timeCallback(new Date(param.time));
+                data.timeCallback(this.date);
+            }
+            this.range = {}
+            if (param.hasOwnProperty('rangeStartTime') &&
+                param.hasOwnProperty('rangeEndTime') &&
+                param.rangeStartTime.length > 0 &&
+                param.rangeEndTime.length > 0) {
+                this.range = {
+                    rangeStartTime: new Date(param.rangeStartTime),
+                    rangeEndTime: new Date(param.rangeEndTime),
+                }
+            }
+            const layers = this.getTimescaleLayers();
+            if (layers.length > 0) {
+                for (let i = 0; i < layers.length; ++i) {
+                    layers[i].updateByTime(this.date, this.range);
+                }
+                this.itownsView.notifyChange();
             }
             this.iframeConnector.sendResponse(request);
         });
 
-        this.layerDataList = this.getLayerDataList();
-        this.itownsView.addEventListener(itowns.VIEW_EVENTS.LAYER_ADDED, (evt) => {
-            this.layerDataList = this.getLayerDataList();
+        this.layerDataList = await this.getLayerDataList();
+        this.itownsView.addEventListener(itowns.VIEW_EVENTS.LAYER_ADDED, async(evt) => {
+            this.layerDataList = await this.getLayerDataList();
             this.iframeConnector.send(ITownsCommand.AddLayer, this.layerDataList);
         });
-        this.itownsView.addEventListener(itowns.VIEW_EVENTS.LAYER_REMOVED, (evt) => {
-            this.layerDataList = this.getLayerDataList();
-            this.iframeConnector.send(ITownsCommand.UpdateLayer, this.layerDataList);
+        this.itownsView.addEventListener(itowns.VIEW_EVENTS.LAYER_REMOVED, async(evt) => {
+            if (!this.isStopDispatchRemoveEvent) {
+                this.layerDataList = await this.getLayerDataList();
+                this.iframeConnector.send(ITownsCommand.UpdateLayer, this.layerDataList);
+            }
         });
         this.itownsView.addEventListener(itowns.VIEW_EVENTS.COLOR_LAYERS_ORDER_CHANGED, (evt) => {
             //this.layerDataList = this.getLayerDataList();
@@ -1113,7 +1620,95 @@ class Store extends EventEmitter {
             })());
         });
 
+        this.iframeConnector.on(ITownsCommand.SelectLayer, (err, param, request) => {
+            const layer = this.getLayer(param.id);
+            if (layer) {
+                // 全レイヤーのisSelectedをfalseとし、選択されたレイヤーのみtrueとする
+                let layers = this.itownsView.getLayers();
+                for (let i = 0; i < layers.length; ++i) {
+                    layers[i].isSelected = false;
+                }
+                layer.isSelected = true;
+            }
+            this.iframeConnector.sendResponse(request);
+        });
+
+        this.addEarthControls();
+
         this.addContentWithInterval();
+    }
+
+    addEarthControls() {
+        const controls = this.itownsView.controls;
+        console.error('addEarthControls', controls instanceof itowns.EarthControls);
+        if (controls instanceof itowns.EarthControls) {
+            const fitButton = document.createElement('button');
+            fitButton.style.position = 'fixed'
+            fitButton.style.bottom = '70px'
+            fitButton.style.left = '35px'
+            fitButton.style.height = "25px";
+            fitButton.style.zIndex = 1;
+            fitButton.style.backgroundColor = "#3071a9"
+            fitButton.style.color = "white"
+            fitButton.style.borderRadius = "4px"
+            fitButton.textContent = 'Fit Camera'
+            fitButton.style.display = controls.isMyOrbitMode ? 'block' : 'none';
+            fitButton.onclick = () => {
+                const layer = this.getSelectedLayer();
+                if (layer) {
+                    if (layer.object3d) {
+                        const bbox = new itowns.THREE.Box3();
+                        layer.object3d.traverse(obj => {
+                            // meshがあった場合
+                            if (obj.type === 'Mesh') {
+                                obj.geometry.computeBoundingBox();
+                                const box = (new itowns.THREE.Box3()).copy(obj.geometry.boundingBox).applyMatrix4(obj.matrixWorld);
+                                bbox.union(box);
+                            }
+                        });
+                        controls.fitCamera(bbox);
+                    }
+                    /* else if (layer.root && layer.root.bbox) {
+                        controls.fitCamera(layer.root.bbox);
+                    }
+                    */
+                }
+                fitButton.blur();
+            }
+            document.body.appendChild(fitButton);
+
+            const changeButton = document.createElement('button');
+            changeButton.textContent = controls.isMyOrbitMode ? 'Mode: Cartecian' : 'Mode: Earth';
+            changeButton.style.backgroundColor = "#3071a9"
+            changeButton.style.position = 'fixed'
+            changeButton.style.bottom = '150px'
+            changeButton.style.left = '35px'
+            changeButton.style.height = "25px";
+            changeButton.style.zIndex = 1;
+            changeButton.style.color = "white"
+            changeButton.style.borderRadius = "4px"
+            changeButton.onclick = function() {
+                controls.setMyOrbitMode(!controls.isMyOrbitMode);
+                changeButton.textContent = controls.isMyOrbitMode ? 'Mode: Cartecian' : 'Mode: Earth';
+                fitButton.style.display = controls.isMyOrbitMode ? 'block' : 'none';
+            }
+            document.body.appendChild(changeButton);
+
+            const resetButton = document.createElement('button');
+            resetButton.style.position = 'fixed'
+            resetButton.style.bottom = '110px'
+            resetButton.style.left = '35px'
+            resetButton.style.height = "25px";
+            resetButton.style.zIndex = 1;
+            resetButton.style.backgroundColor = "#3071a9"
+            resetButton.style.color = "white"
+            resetButton.style.borderRadius = "4px"
+            resetButton.textContent = 'Reset Camera'
+            resetButton.onclick = function() {
+                controls.resetCamera();
+            }
+            document.body.appendChild(resetButton);
+        }
     }
 
     _injectChOWDER(data) {

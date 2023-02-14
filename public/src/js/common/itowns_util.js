@@ -5,17 +5,18 @@
 
 "use strict";
 
+import Constants from './constants';
 import ITownsCommand from './itowns_command.js';
 
 // ChOWDERメタデータを元にiTownsビュー更新用のユーティリティ
 class ITownsUtil {
     
-    static updateCamera(iframeConnector, metaData) {
+    static updateCamera(iframeConnector, metaData, callback = null) {
         if (metaData.hasOwnProperty('cameraWorldMatrix') && metaData.hasOwnProperty('cameraParams')) {
             iframeConnector.send(ITownsCommand.UpdateCamera, {
                 mat : JSON.parse(metaData.cameraWorldMatrix),
                 params : JSON.parse(metaData.cameraParams),
-            });
+            }, callback);
         }
     }
 
@@ -27,7 +28,7 @@ class ITownsUtil {
         return IDList;
     }
 
-    static updateLayerList(iframeConnector, metaData, preMetaData) {
+    static updateLayerList(iframeConnector, metaData, preMetaData, callback) {
         try {
             if (metaData.hasOwnProperty('layerList')) {
                 let preLayerListStr =  preMetaData ? preMetaData.layerList : [];
@@ -64,6 +65,10 @@ class ITownsUtil {
                         let layer = layerList[i];
                         iframeConnector.send(ITownsCommand.ChangeLayerProperty, layer);
                     }
+                    if (callback)
+                    {
+                        callback();
+                    }
                 }
             }
         }
@@ -72,14 +77,64 @@ class ITownsUtil {
         }
     }
 
-    static updateTime(iframeConnector, metaData, time) {
-        iframeConnector.send(ITownsCommand.UpdateTime, {
+    static updateTime(iframeConnector, metaData, time, range) {
+        let timeData = {
             time : time.toJSON()
+        };
+        if (range.hasOwnProperty('rangeStartTime') && range.hasOwnProperty('rangeEndTime')) {
+            timeData.rangeStartTime = range.rangeStartTime.toJSON();
+            timeData.rangeEndTime = range.rangeEndTime.toJSON();
+        }
+        iframeConnector.send(ITownsCommand.UpdateTime, timeData);
+    }
+
+    static resize(iframeConnector, rect, isSetOffset = true) {
+        iframeConnector.send(ITownsCommand.Resize, {
+            rect : rect,
+            isSetOffset : isSetOffset
         });
     }
 
-    static resize(iframeConnector, rect) {
-        iframeConnector.send(ITownsCommand.Resize, rect);
+    static createCopyrightText(metaData) {
+        let copyrightText = "";
+        let layerList = JSON.parse(metaData.layerList);
+        for (let i = 0; i < layerList.length; ++i)
+        {
+            if (layerList[i].hasOwnProperty(Constants.ItownsAttributionKey))
+            {
+                let attrib = layerList[i][Constants.ItownsAttributionKey];
+                if (attrib.hasOwnProperty('name') && attrib.name.length > 0) {
+                    copyrightText += attrib.name + "<br />"
+                }
+                if (attrib.hasOwnProperty('url') && attrib.url.length > 0) {
+                    copyrightText += '<a href="' 
+                    + attrib.url 
+                    + '" class="copyright_link">' 
+                    + attrib.url 
+                    + "</a><br />";
+                }
+            }
+        }
+        return copyrightText;
+    }
+
+    // 指定のメタデータがタイムライン同期対象となっているか返す.
+    static isTimelineSync(metaData, senderID = null, senderSync = null) {
+        let isSync =  (!metaData.hasOwnProperty('sync')) // syncボタンが1回も押されていない
+            || (metaData.hasOwnProperty('sync') && String(metaData.sync) === 'true');   // syncボタンが押されてsyncとなっている
+
+        if (senderSync !== null) {
+            // senderがsync=falseの状態であればfalseとする
+            isSync = isSync &&  String(senderSync) === 'true'; 
+        }
+        if (senderID !== null) {
+            // 送信元IDが引数にあった場合は、
+            // 送信元IDとmetadataのIDが同じであれば
+            // isSync = trueとする。
+            // senderSyncがfalseの場合でも、同じIDであればtrueとする。
+            isSync = isSync || (metaData.id === senderID); 
+        }
+        return isSync;
     }
 }
 

@@ -22,6 +22,10 @@ const Command = {
 	UpdateVirtualDisplay : "UpdateVirtualDisplay",
 	GetVirtualDisplay : "GetVirtualDisplay",
 	GetGroupList : "GetGroupList",
+	UploadTileimage : "UploadTileimage",
+	GetLoginUserList : "GetLoginUserList",
+	GetSelfStatus : "GetSelfStatus",
+	UpdateLoginUserControllerID : "UpdateLoginUserControllerID",
 
 	// using both server and client
 	Update : "Update",
@@ -79,6 +83,8 @@ const Command = {
 	DeleteDisplayPermissionList : "DeleteDisplayPermissionList",
 
 	GetDisplayPermissionList : "GetDisplayPermissionList", // コントローラが許可設定一覧をサーバに要求する
+
+	Upload : "Upload",
 };
 
 export default Command;

@@ -22,6 +22,8 @@ const ITownsCommand = {
     AddLayer : "AddLayer",
     // レイヤー削除命令
     DeleteLayer : "DeleteLayer",
+    // レイヤー選択
+    SelectLayer : "SelectLayer",
     // レイヤー順序変更命令
     ChangeLayerOrder : "ChangeLayerOrder",
     // レイヤープロパティ変更命令
@@ -29,7 +31,11 @@ const ITownsCommand = {
     // パフォーマンス計測
     MeasurePerformance : "MeasurePerformance",
     // 現在時刻の更新
-    UpdateTime : "UpdateTime"
+    UpdateTime : "UpdateTime",
+    // itowns側からのレイヤー初期化完了通知
+    LayersInitialized : "LayersInitialized",
+    // 強制ステップ実行(VR用)
+    StepForce : "StepForce",
 };
 
 export default ITownsCommand;

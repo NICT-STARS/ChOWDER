@@ -3,8 +3,6 @@
  * Copyright (c) 2016-2018 RIKEN Center for Computational Science. All rights reserved.
  */
 
-"use strict";
-
 import Action from './action'
 import Constants from '../common/constants'
 import Command from '../common/command';
@@ -12,6 +10,7 @@ import Connector from '../common/ws_connector.js';
 import Operation from './operation'
 import IFrameConnector from '../common/iframe_connector';
 import ITownsCommand from '../common/itowns_command';
+import ITownsUtil from '../common/itowns_util';
 
 const reconnectTimeout = 2000;
 
@@ -22,6 +21,8 @@ class Store extends EventEmitter {
         this.operation = new Operation(Connector, this); // 各種storeからのみ限定的に使う
         this.isInitialized_ = false;
 
+        this.globalSetting = {};
+
         this.initEvents();
 
         // itownコンテンツのメタデータ
@@ -31,28 +32,38 @@ class Store extends EventEmitter {
         // 初回カメラ行列用キャッシュ
         this.initialMatrix = null;
 
-        const year = 2019;
-        const month = 8;
-        const day = 3;
+        // csvキャッシュ。csvは大きいのでmetaDataとして登録しない。
+        this.csvCaches = {}
+            // jsonキャッシュ。jsonは大きいのでmetaDataとして登録しない。
+        this.jsonCaches = {}
+
+        const year = 2020;
+        const month = 12;
+        const day = 6;
         const minHour = 10;
 
         // タイムラインStart Time
-        this.timelineStartTime = new Date(year, (month - 1), day, minHour, 0, 0)
+        this.timelineStartTime = new Date((new Date()).getFullYear(), (new Date()).getMonth(), (new Date()).getDate(), 0, 0, 0, 0);
         // タイムラインEnd Time
-        this.timelineEndTime = new Date(year, (month - 1), day, 23, 59, 59)
+        this.timelineEndTime = new Date((new Date()).getFullYear(), (new Date()).getMonth(), (new Date()).getDate(), 23, 59, 59, 999);
         // タイムラインCurrent Time
-        this.timelineCurrentTime = new Date(year, (month - 1), day, 13, 51);
+        this.timelineCurrentTime = new Date(Date.now());
+        // タイムラインのRangeBar(オレンジのやつ)
+        this.timelineRangeBar = null;
 
         // websocket接続が確立された.
         // ログインする.
         this.on(Store.EVENT_CONNECT_SUCCESS, (err) => {
             console.log("websocket connected")
-            //let loginOption = { id: "APIUser", password: "" }
-            //this.action.login(loginOption);
+            
+            // グローバル設定を取得
+            Connector.send(Command.GetGlobalSetting, {}, (err, reply) => {
+                this.globalSetting = reply;
+            });
         })
 
         // コンテンツ追加完了した.
-        this.on(Store.EVENT_DONE_ADD_CONTENT, (err, reply) => {
+        this.on(Store.EVENT_DONE_ADD_CONTENT, (err, reply, endCallback) => {
             let isInitialContent = (!this.metaData);
 
             this.metaData = reply;
@@ -66,6 +77,7 @@ class Store extends EventEmitter {
                     })
                 }
             }
+            if (endCallback) { endCallback(); }
         })
 
         this.performanceResult = {}
@@ -87,6 +99,7 @@ class Store extends EventEmitter {
             }
         });
 
+        // タイムライン時刻変更の受信
         // パフォーマンス計測結果の受信
         Connector.on(Command.SendMessage, (data) => {
             if (data && data.hasOwnProperty('command') && data.command === "measureITownPerformanceResult") {
@@ -97,15 +110,23 @@ class Store extends EventEmitter {
             }
             if (data && data.hasOwnProperty('command') && data.command === "changeItownsContentTime") {
                 if (data.hasOwnProperty('data') && data.data.hasOwnProperty('time')) {
-                    if (this.timelineCurrentTime.toJSON() != data.data.time) {
-                        let range = (this.timelineEndTime.getTime() - this.timelineStartTime.getTime()) / 2;
-                        this.timelineCurrentTime = new Date(data.data.time);
-                        this.timelineStartTime = new Date(this.timelineCurrentTime.getTime() - range);
-                        this.timelineEndTime = new Date(this.timelineCurrentTime.getTime() + range);
-                        this.iframeConnector.send(ITownsCommand.UpdateTime, {
-                            time : data.data.time
-                        });
-                        this.emit(Store.EVENT_DONE_CHANGE_TIMELINE_RANGE, null);
+                    // sync状態でない場合、同じコンテンツIDのものにしか反映させない)
+                    if (ITownsUtil.isTimelineSync(this.metaData, data.data.id, data.data.senderSync)) {
+                        if (this.timelineCurrentTime.toJSON() != data.data.time) {
+                            let range = (this.timelineEndTime.getTime() - this.timelineStartTime.getTime()) / 2;
+                            this.timelineCurrentTime = new Date(data.data.time);
+                            this.timelineStartTime = new Date(this.timelineCurrentTime.getTime() - range);
+                            this.timelineEndTime = new Date(this.timelineCurrentTime.getTime() + range);
+                            let message = {
+                                time: data.data.time,
+                            }
+                            if (data.data.hasOwnProperty('rangeStartTime') && data.data.hasOwnProperty('rangeEndTime')) {
+                                message.rangeStartTime = data.data.rangeStartTime;
+                                message.rangeEndTime = data.data.rangeEndTime;
+                            }
+                            this.iframeConnector.send(ITownsCommand.UpdateTime, message);
+                            this.emit(Store.EVENT_DONE_CHANGE_TIMELINE_RANGE, null);
+                        }
                     }
                 }
             }
@@ -130,8 +151,7 @@ class Store extends EventEmitter {
                     }
                 }
             }
-        }
-        catch (e) {
+        } catch (e) {
             console.error(e);
         }
     }
@@ -146,7 +166,7 @@ class Store extends EventEmitter {
         super.emit(...arguments);
     }
 
-    release() { }
+    release() {}
 
     initEvents() {
         for (let i in Action) {
@@ -206,6 +226,28 @@ class Store extends EventEmitter {
         });
     }
 
+    __execludeAndCacheCSVData(layerParams) {
+        for (let i = 0; i < layerParams.length; ++i) {
+            const layerParam = layerParams[i];
+            if (layerParam.hasOwnProperty('csv')) {
+                this.csvCaches[layerParam.id] = layerParam.csv;
+                delete layerParam.csv;
+                break;
+            }
+        }
+    }
+
+    __execludeAndCacheJSONData(layerParams) {
+        for (let i = 0; i < layerParams.length; ++i) {
+            const layerParam = layerParams[i];
+            if (layerParam.hasOwnProperty('json')) {
+                this.jsonCaches[layerParam.id] = layerParam.json;
+                delete layerParam.json;
+                break;
+            }
+        }
+    }
+
     _connectIFrame(data) {
         let iframe = data;
         this.iframeConnector = new IFrameConnector(iframe);
@@ -214,6 +256,8 @@ class Store extends EventEmitter {
             // iframe内のitownsのレイヤーが追加された
             // storeのメンバに保存
             this.iframeConnector.on(ITownsCommand.AddLayer, (err, params) => {
+                this.__execludeAndCacheCSVData(params);
+                this.__execludeAndCacheJSONData(params);
                 if (params.length > 0 && this.metaData) {
                     for (let i = 0; i < params.length; ++i) {
                         let layerParam = params[i];
@@ -229,16 +273,16 @@ class Store extends EventEmitter {
                     });
                     return;
                 }
-                // 初回起動時などで、レイヤー情報がまだmetadata似ない場合.
+                // 初回起動時などで、レイヤー情報がまだmetadataにない場合.
                 this.emit(Store.EVENT_DONE_ADD_LAYER, null, params);
             });
 
             //  iframe内のitownsのレイヤーが削除された
             // storeのメンバに保存
-            this.iframeConnector.on(ITownsCommand.DeleteLayer, (err, params) => {
-            });
+            this.iframeConnector.on(ITownsCommand.DeleteLayer, (err, params) => {});
 
             this.iframeConnector.on(ITownsCommand.UpdateLayer, (err, params) => {
+                this.__execludeAndCacheCSVData(params);
                 let layerList = [];
                 if (params.length > 0 && this.metaData) {
                     for (let i = 0; i < params.length; ++i) {
@@ -252,8 +296,7 @@ class Store extends EventEmitter {
                     }
                 }
                 this.metaData.layerList = JSON.stringify(layerList);
-                this.operation.updateMetadata(this.metaData, (err, res) => {
-                });
+                this.operation.updateMetadata(this.metaData, (err, res) => {});
             });
 
             this.emit(Store.EVENT_DONE_IFRAME_CONNECT, null, this.iframeConnector);
@@ -263,7 +306,7 @@ class Store extends EventEmitter {
     _addContent(data) {
         let metaData = data.metaData;
         let contentData = data.contentData;
-        this.operation.addContent(metaData, contentData);
+        this.operation.addContent(metaData, contentData, () => {});
     }
 
     _resizeWindow(data) {
@@ -276,8 +319,7 @@ class Store extends EventEmitter {
         metaData.height = metaData.height * (wh.height / parseFloat(metaData.orgHeight));
         metaData.orgWidth = wh.width;
         metaData.orgHeight = wh.height;
-        this.operation.updateMetadata(metaData, (err, res) => {
-        });
+        this.operation.updateMetadata(metaData, (err, res) => {});
     }
 
     _updateCamera(data) {
@@ -288,8 +330,7 @@ class Store extends EventEmitter {
             // 幅高さは更新しない
             delete updateData.width;
             delete updateData.height;
-            this.operation.updateMetadata(updateData, (err, res) => {
-            });
+            this.operation.updateMetadata(updateData, (err, res) => {});
         } else {
             // コンテンツ追加完了前だった。完了後にカメラを更新するため、matrixをキャッシュしておく。
             this.initialMatrix = data.mat;
@@ -299,8 +340,7 @@ class Store extends EventEmitter {
 
     _logout(data) {
         this.authority = null;
-        Connector.send(Command.Logout, {}, function () {
-        });
+        Connector.send(Command.Logout, {}, function() {});
     }
 
     _addLayer(data) {
@@ -318,8 +358,11 @@ class Store extends EventEmitter {
         //}
     }
 
+    _selectLayer(data) {
+        this.iframeConnector.send(ITownsCommand.SelectLayer, data);
+    }
+
     _deleteLayer(data) {
-        console.error(data);
         // TODO サーバ側更新
         let layerList = JSON.parse(this.metaData.layerList);
         for (let i = 0; i < layerList.length; ++i) {
@@ -331,9 +374,10 @@ class Store extends EventEmitter {
                     this.metaData.layerList = JSON.stringify(layerList);
 
                     console.log("updateMetadata", data, this.metaData)
-                    // iframeへ送る
+                        // iframeへ送る
                     this.iframeConnector.send(ITownsCommand.DeleteLayer, data, (err, data) => {
-                        // サーバへ送る
+                        console.error("DeleteLayer")
+                            // サーバへ送る
                         this.operation.updateMetadata(this.metaData, (err, res) => {
                             this.emit(Store.EVENT_DONE_DELETE_LAYER, null, data);
                         });
@@ -364,7 +408,21 @@ class Store extends EventEmitter {
                 }
             }
         }
-        console.error("Not found layer from current content.", layerID);
+        console.log("Not found layer from current content.", layerID, JSON.parse(this.metaData.layerList));
+        return null;
+    }
+
+    getCSVCache(layerID) {
+        if (this.csvCaches.hasOwnProperty(layerID)) {
+            return this.csvCaches[layerID];
+        }
+        return null;
+    }
+
+    getJSONCache(layerID) {
+        if (this.jsonCaches.hasOwnProperty(layerID)) {
+            return this.jsonCaches[layerID];
+        }
         return null;
     }
 
@@ -390,13 +448,16 @@ class Store extends EventEmitter {
         let layer = this.getLayerData(data.id);
         if (layer) {
             for (let key in data) {
-                if (key !== "id") {
+                if (key !== "id" && key !== "callback") {
                     layer[key] = data[key];
                 }
             }
             this.saveLayer(layer);
 
             this.operation.updateMetadata(this.metaData, (err, res) => {
+                if (data.hasOwnProperty('callback')) {
+                    data.callback();
+                }
             });
 
             // 接続されていなくても見た目上変わるようにしておく
@@ -413,7 +474,7 @@ class Store extends EventEmitter {
     _fetchContents(data) {
         let metaDataDict = {}; // id, metaData
         Connector.send(Command.GetMetaData, { type: "all", id: '' }, (err, metaData) => {
-            if (!err && metaData && metaData.type === Constants.TypeWebGL) {
+            if (!err && metaData && metaData.type === Constants.TypeWebGL && !metaData.webglType) {
                 if (!metaDataDict.hasOwnProperty(metaData.id)) {
                     metaDataDict[metaData.id] = metaData;
                     this.emit(Store.EVENT_DONE_FETCH_CONTENTS, null, metaData);
@@ -433,36 +494,94 @@ class Store extends EventEmitter {
         if (meta.hasOwnProperty('cameraWorldMatrix')) {
             // カメラをメタデータの値を元に設定
             this.iframeConnector.send(ITownsCommand.UpdateCamera, {
-                mat : JSON.parse(meta.cameraWorldMatrix),
-                params : JSON.parse(meta.cameraParams),
+                mat: JSON.parse(meta.cameraWorldMatrix),
+                params: JSON.parse(meta.cameraParams),
             });
         }
         if (layerList.length > 0) {
             // レイヤー初期化
-            this.iframeConnector.send(ITownsCommand.InitLayers, layerList, (err, data) => {});
+            this.iframeConnector.send(ITownsCommand.InitLayers, layerList, (err, data) => {
+                this._changeTimeByTimeline({
+                    currentTime: this.timelineCurrentTime,
+                    startTime: this.timelineStartTime,
+                    endTime: this.timelineEndTime,
+                });
+            });
             this.emit(Store.EVENT_DONE_ADD_LAYER, null, layerList);
             this.emit(Store.EVENT_DONE_UPDATE_METADATA, null, meta);
         }
     }
 
     _changeTime(data) {
-        this.timelineCurrentTime = data.time;
+        this.timelineCurrentTime = data.currentTime;
+        if (this.timelineCurrentTime.getTime() < this.timelineStartTime.getTime() ||
+            this.timelineCurrentTime.getTime() > this.timelineEndTime.getTime()) {
+            const span = (this.timelineEndTime.getTime() - this.timelineStartTime.getTime()) / 2;
+            this.timelineStartTime = new Date(this.timelineCurrentTime.getTime() - span);
+            this.timelineEndTime = new Date(this.timelineCurrentTime.getTime() + span);
+        }
 
         if (this.metaData) {
-            /*
-            this.metaData.time = data.time.toJSON();
-
-            this.operation.updateMetadata(this.metaData, (err, res) => {
-            });
-            */
-            Connector.send(Command.SendMessage, {
-                command : "changeItownsContentTime",
-                data : data
-            }, () => {
+            const isSync = ITownsUtil.isTimelineSync(this.metaData);
+            // console.error("sendmessage", this.metaData.id)
+            let message = {
+                command: "changeItownsContentTime",
+                data: {
+                    time: data.currentTime.toJSON(),
+                    rangeStartTime: this.timelineRangeBar ? this.timelineRangeBar.rangeStartTime.toJSON() : "",
+                    rangeEndTime: this.timelineRangeBar ? this.timelineRangeBar.rangeEndTime.toJSON() : "",
+                    id: this.metaData.id,
+                    senderSync: isSync // 送信元のsync状態
+                }
+            };
+            Connector.send(Command.SendMessage, message, () => {
                 this.iframeConnector.send(ITownsCommand.UpdateTime, {
-                    time : data.time.toJSON()
+                    time: data.currentTime.toJSON(),
+                    rangeStartTime: this.timelineRangeBar ? this.timelineRangeBar.rangeStartTime.toJSON() : "",
+                    rangeEndTime: this.timelineRangeBar ? this.timelineRangeBar.rangeEndTime.toJSON() : "",
                 });
             })
+
+            this.emit(Store.EVENT_DONE_CHANGE_TIME, null, data);
+        }
+    }
+
+    // タイムラインのGUIから時刻を変更した場合
+    // 変更完了イベントを投げない（再描画を行わない）
+    // 現在のstoreの時刻からタイムラインを再描画させるとタイムラインの設計的にtimeChangeが走って無限ループする。
+    _changeTimeByTimeline(data) {
+        this.timelineCurrentTime = data.currentTime;
+        this.timelineStartTime = data.startTime;
+        this.timelineEndTime = data.endTime;
+
+        if (this.metaData) {
+            const isSync = ITownsUtil.isTimelineSync(this.metaData);
+            // console.error("sendmessage", this.metaData.id)
+            let message = {
+                command: "changeItownsContentTime",
+                data: {
+                    time: data.currentTime.toJSON(),
+                    rangeStartTime: this.timelineRangeBar ? this.timelineRangeBar.rangeStartTime.toJSON() : "",
+                    rangeEndTime: this.timelineRangeBar ? this.timelineRangeBar.rangeEndTime.toJSON() : "",
+                    id: this.metaData.id,
+                    senderSync: isSync // 送信元のsync状態
+                }
+            };
+            Connector.send(Command.SendMessage, message, () => {
+                this.iframeConnector.send(ITownsCommand.UpdateTime, {
+                    time: data.currentTime.toJSON(),
+                    rangeStartTime: this.timelineRangeBar ? this.timelineRangeBar.rangeStartTime.toJSON() : "",
+                    rangeEndTime: this.timelineRangeBar ? this.timelineRangeBar.rangeEndTime.toJSON() : "",
+                });
+            })
+        }
+    }
+
+    _changeTimelineSync(data) {
+        if (this.metaData) {
+            this.metaData.sync = data.sync;
+            this.operation.updateMetadata(this.metaData, (err, res) => {});
+            this.emit(Store.EVENT_DONE_UPDATE_METADATA, null, this.metaData);
         }
     }
 
@@ -470,8 +589,8 @@ class Store extends EventEmitter {
         if (!this.metaData) return;
         this.performanceResult = {};
         Connector.send(Command.SendMessage, {
-            command : "measureITownPerformance",
-            id : this.metaData.id
+            command: "measureITownPerformance",
+            id: this.metaData.id
         }, () => {});
     }
 
@@ -482,13 +601,43 @@ class Store extends EventEmitter {
     getTimelineStartTime() {
         return this.timelineStartTime;
     }
-    
+
     getTimelineEndTime() {
         return this.timelineEndTime;
     }
 
     getTimelineCurrentTime() {
         return this.timelineCurrentTime;
+    }
+
+    getTimelineCurrentTimeString() {
+        const time = this.timelineCurrentTime;
+        const year = time.getFullYear();
+        const month = ("0" + (time.getMonth() + 1)).slice(-2);
+        const date = ("0" + time.getDate()).slice(-2);
+        const hour = ("0" + time.getHours()).slice(-2);
+        const minutes = ("0" + time.getMinutes()).slice(-2);
+        const seconds = ("0" + time.getSeconds()).slice(-2);
+        const offset = time.getTimezoneOffset();
+        const sign = Math.sign(-offset) >= 0 ? "+" : "-";
+        const offsetMin = Math.abs(time.getTimezoneOffset() % 60);
+        let offsetStr = "GMT" + sign + Math.floor(Math.abs(time.getTimezoneOffset() / 60));
+        if (offsetMin > 0) {
+            offsetStr += ":" + offsetMin;
+        }
+        if (offset === 0) {
+            offsetStr = "GMT";
+        }
+        const ymdhms = year + "/" + month + "/" + date + " " +
+            hour + ":" +
+            minutes + ":" +
+            seconds + " " + offsetStr
+
+        return ymdhms;
+    }
+
+    getTimelineRangeBar() {
+        return this.timelineRangeBar;
     }
 
     _changeTimelineRange(data) {
@@ -498,11 +647,43 @@ class Store extends EventEmitter {
             if (this.timelineCurrentTime.getTime() < this.timelineStartTime.getTime()) {
                 this.timelineCurrentTime = this.timelineStartTime;
             }
-            if (this.timelineEndTime.getTime() > this.timelineEndTime.getTime()) {
+            if (this.timelineCurrentTime.getTime() > this.timelineEndTime.getTime()) {
                 this.timelineCurrentTime = this.timelineEndTime;
             }
             this.emit(Store.EVENT_DONE_CHANGE_TIMELINE_RANGE, null);
         }
+    }
+
+    _changeTimelineRangeBar(data) {
+        if (data.hasOwnProperty('rangeStartTime') && data.hasOwnProperty('rangeEndTime')) {
+            this.timelineRangeBar = data;
+            if (data.rangeStartTime.getTime() === data.rangeEndTime.getTime()) {
+                data.rangeEndTime = new Date(data.rangeStartTime.getTime() + 24 * 60 * 60 * 1000);
+            }
+        } else {
+            this.timelineRangeBar = null;
+        }
+        this._changeTimeByTimeline({
+            currentTime: this.timelineCurrentTime,
+            startTime: this.timelineStartTime,
+            endTime: this.timelineEndTime,
+        });
+        this.emit(Store.EVENT_DONE_CHANGE_TIMELINE_RANGE_BAR, null);
+    }
+
+    _upload(data) {
+        console.error(data);
+        const param = {
+            filename: data.filename,
+            type: data.type
+        };
+        Connector.sendBinary(Command.Upload, param, data.binary, (err, reply) => {
+            this.emit(Store.EVENT_DONE_UPLOAD, err, reply);
+        });
+    }
+
+    getGlobalSetting() {
+        return this.globalSetting;
     }
 }
 
@@ -521,5 +702,7 @@ Store.EVENT_DONE_IFRAME_CONNECT = "done_iframe_connect"
 Store.EVENT_DONE_FETCH_CONTENTS = "done_fetch_contents";
 Store.EVENT_UPDATE_MEASURE_PERFORMANCE = "update_mesure_performance"; // 計測結果が更新された
 Store.EVENT_DONE_CHANGE_TIMELINE_RANGE = "done_change_timeline_range";
-
+Store.EVENT_DONE_CHANGE_TIME = "done_change_time";
+Store.EVENT_DONE_CHANGE_TIMELINE_RANGE_BAR = "done_change_timeline_range_bar";
+Store.EVENT_DONE_UPLOAD = "done_upload";
 export default Store;

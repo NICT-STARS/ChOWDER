@@ -112,6 +112,10 @@ p {
 	margin-right: 14px;
 }
 
+.attribution_title {
+	font-size : 11px;
+}
+
 .property_text {
 	margin-left: 14px;
 	margin-right: 14px;
@@ -173,18 +177,81 @@ p {
     cursor:not-allowed;
 }
 
+.time_button_list {
+	width : 240px;
+	height : 150px;
+	overflow-y : auto;
+    border: 1px solid gray;
+    margin-left: 10px;
+    margin-right: 10px;
+}
+
+.time_button_wrap {
+	padding: 1px;
+	padding-top : 5px;
+	padding-left : 4px;
+}
+
+.reset_rangebar_button_wrap {
+    margin: 5px;
+	margin-top : 0px;
+    padding-left: 5px;
+    padding-right: 5px;
+}
+
+.reset_rangebar_button {
+    width: 100%;
+    height: 25px;
+    padding: 0px;
+    border-top-right-radius: 0px;
+    border-top-left-radius: 0px;
+}
+
+.time_button { 
+	width : 220px;
+    height: 20px;
+    vertical-align: middle;
+    padding: 0px;
+}
+
 .layer_dialog {
 	display : none;
 	top: 50%;
 	left: 50%;
     width: 600px;
-    height: 300px;
-	margin-top: calc(-300px / 2);
+    height: 350px;
+	margin-top: calc(-350px / 2);
 	margin-left: calc(-500px / 2);
 	position: fixed;
 	z-index: 100000000;
 	background-color: rgb(83, 83, 83);
 	border-radius: 5px;
+}
+
+
+.timeline_sync_button {
+	position : fixed;
+    width: 60px;
+	height : 32px;
+	right : calc(260px + 8px);
+	bottom : 60px;
+	border : 5px solid rgb(253, 221, 221);
+	border-radius: 3px;
+	
+    padding: 0px;
+    font-size: 11px;
+    font-weight: bold;
+    color: darkgray;
+}
+
+.timeline_sync_button:hover {
+	border : 5px solid gray;
+}
+
+.timeline_sync_button_pressed {
+	background : rgb(81, 191, 93);
+	border-color:#b1ffb9;
+	color : black;
 }
 
 .timeline_setting_dialog {
@@ -208,14 +275,89 @@ p {
 	
     width: 32px;
     height: 32px;
-    position: fixed;
-    left: 8px;
-    bottom: 10px;
+    margin: 3px;
+    border: none;
     background-color: lightgray;
 }
 
 .timeline_setting_button:hover {
     background-color: white;
+}
+
+.timeline_play_button {
+	background-image:url("../image/play.png");
+	background-repeat:no-repeat;
+	background-size: contain;
+	
+    width: 32px;
+    height: 32px;
+    margin: 3px;
+    border: none;
+    background-color: lightgray;
+}
+
+.timeline_play_button_pressed {
+	background-image:url("../image/pause.png");
+}
+
+.timeline_play_button:hover {
+    background-color: white;
+}
+
+.layer_dialog_csv_loading {
+	background-image:url("../image/loading.gif");
+	background-repeat:no-repeat;
+	background-size: contain;
+
+    padding-left: 30px;
+    color: white;
+}
+
+.layer_dialog_error {
+    padding-top: 10px;
+    color: orangered;
+}
+
+.layer_dialog_style_name_input {
+	width : 100px;
+}
+
+/*
+.timeline_pause_button {
+	background-image:url("../image/pause.png");
+	background-repeat:no-repeat;
+	background-size: contain;
+	
+    width: 32px;
+    height: 32px;
+    margin: 3px;
+    margin-left: 2px;
+    margin-right: 4px;
+    background-color: lightgray;
+}
+
+.timeline_pause_button:hover {
+    background-color: white;
+}
+*/
+.timeline_play_wrap {
+	position: fixed;
+	left: 10px;
+    bottom: 10px;
+    background: gray;
+    width: 38px;
+    height: 38px;
+    border-radius: 5px;
+}
+
+.timeline_setting_wrap {
+    position: fixed;
+    right: calc(260px + 8px);
+    bottom: 10px;
+    background: gray;
+    border-radius: 5px;
+    width: 38px;
+    height: 38px;
 }
 
 .layer_dialog_ok_button {
@@ -293,8 +435,30 @@ p {
 	padding-right : 5px;
 }
 
+.layer_dialog_epsg_title {
+	display : inline-block;
+	padding-right : 5px;
+	padding-left : 10px;
+}
+
+.layer_dialog_fileopen_title {
+	display : inline-block;
+	padding-right : 5px;
+}
+.layer_dialog_fileopen_input {
+	display : inline-block;
+}
+
 .layer_dialog_zoom_max_title {
 	padding-left : 10px;
+}
+
+.layer_dialog_epsg_definition_input {
+    width: 260px;
+}
+
+.layer_dialog_epsg_input {
+	width : 60px;
 }
 
 .input-group {
@@ -307,6 +471,35 @@ p {
 	padding-top : 10px;
 }
 
+.property_bargraph_col {
+	margin: 3px;
+    margin-left: 12px;
+    height: 30px;
+    width: calc(100% - 24px);
+}
+
+.property_bargraph_physical {
+	width: calc(100% - 60px);
+}
+
+.property_bargraph_physical_custom_button {
+	background-image:url("../image/setting3.png");
+	background-repeat:no-repeat;
+	background-size: contain;
+	
+    float: right;
+    width: 30px;
+    height: 30px;
+    margin: 3px;
+    margin-right: 12px;
+    border: none;
+    background-color: lightgray;
+}
+
+.property_bargraph_physical_custom_button:hover {
+    background-color: white;
+}
+
 .timeline_wrap {
 	background : #3b3848;
 	height : 120px;
@@ -316,9 +509,18 @@ p {
 }
 .timeline {
 	position: absolute;
-	left : 10%;
+	left : 100px;
 	height : 120px;
-	width: 80%;
+	width: calc(100% -  100px - 100px);
+}
+
+.timeline_current_time {
+	position: absolute;
+	left : 0px;
+	top : 5px;
+	color : white;
+	font-size: 12px;
+	color : lightgray;
 }
 
 .k2go-timeline-main {
@@ -337,10 +539,39 @@ p {
 	background : lightgray;
 }
 
+.layer_dialog_epsg_min_select:disabled {
+	background : lightgray;
+}
+
+.layer_dialog_epsg_max_select:disabled {
+	background : lightgray;
+}
+
 .measure_button {
     bottom: 10px;
     position: fixed;
     right: 15px;
 	width: 220px;
 	height: 34px;
+}
+
+.copyright {
+	position : absolute;
+	color : black;
+	height : 50px;
+	font-size : 1em;
+	background-color: rgba(255, 255, 255, 0.5);
+	border : 1px solid gray;
+	padding : 10px;
+	box-sizing: border-box;
+	margin: unset;
+}
+.copyright_link:link {
+	color : black;
+}
+.copyright_link:visited {
+	color : black;
+}
+.copyright_link:hover {
+	color : lightgray;
 }

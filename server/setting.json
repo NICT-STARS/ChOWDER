@@ -5,5 +5,14 @@
     "stunServerUrl" : "",
     "turnServerUrl" : "",
     "turnServerUsername" : "",
-    "turnServerCredential" : ""
+    "turnServerCredential" : "",
+    "enableHTTP" : true,
+    "enableSSL" : true,
+    "HTTPPort" : 80,
+    "SSLPort" : 443,
+    "enableCORS" : true,
+    "VRMode" : "cylinder",
+    "reduceUpdate": false,
+    "reduceInterval" : 500,
+    "tileviewerCursorSize" : 100
 }

@@ -19,6 +19,8 @@ import InputDialog from '../components/input_dialog'
 import PopupBackground from '../components/popup_background';
 import DateInput from '../components/date_input';
 import TimelineSettingDialog from './timeline_setting_dialog';
+import ITownsUtil from '../common/itowns_util';
+import Input from '../components/input';
 
 function serializeFunction(f) {
     return encodeURI(f.toString());
@@ -35,6 +37,9 @@ function toArrayBuffer(base64) {
     return buffer.buffer;
 }
 
+const pressedClassName = 'timeline_sync_button_pressed';
+const timelinePlayButtonPressed = 'timeline_play_button_pressed';
+
 class GUI extends EventEmitter {
     constructor(store, action) {
         super();
@@ -44,70 +49,111 @@ class GUI extends EventEmitter {
 
     }
 
-    init() {
-        // 一定間隔同じイベントが来なかったら実行するための関数
-        let debounceChangeTime = (() => {
-            const interval = 100;
-            let timer;
-            return (pTimeInfo) => {
-                clearTimeout(timer);
-                timer = setTimeout(() => {
-                    this.action.changeTime({
-                        time: new Date(pTimeInfo.currentTime)
-                    });
-                }, interval);
-            };
-        })();
+    __extrudeStartEndTime(startEndTime, targetTime) {
+        if (targetTime.getTime() <= startEndTime.startTime.getTime()) {
+            startEndTime.startTime = new Date(targetTime.getTime() - 3600);
+        }
+        if (targetTime.getTime() >= startEndTime.endTime.getTime()) {
+            startEndTime.endTime = new Date(targetTime.getTime() + 3600);
+        }
+    }
 
-        $("#timeline").k2goTimeline(
+    // targetTimeがtimelineStartTime～timelineEndTimeの範囲外であった場合に、
+    // timelineStartTime, timelineEndTimeを再設定する
+    __extrudeMinMaxTime(minMaxTime, targetTime) {
+        // console.error("minMaxTime, targetTime", minMaxTime, targetTime);
+        if (targetTime.getTime() <= minMaxTime.minTime.getTime()) {
+            minMaxTime.minTime = new Date(targetTime.getTime() - 3600);
+        }
+        if (targetTime.getTime() >= minMaxTime.maxTime.getTime()) {
+            minMaxTime.maxTime = new Date(targetTime.getTime() + 3600);
+        }
+    }
+
+    updateTimeline() {
+        const start = this.store.getTimelineStartTime();
+        const end = this.store.getTimelineEndTime();
+        const current = this.store.getTimelineCurrentTime();
+        let minMaxTime = {
+            minTime: $(".k2go-timeline-main").data("options.k2goTimeline").minTime,
+            maxTime: $(".k2go-timeline-main").data("options.k2goTimeline").maxTime
+        }
+        /*
+        this.__extrudeMinMaxTime(minMaxTime, start);
+        this.__extrudeMinMaxTime(minMaxTime, end);
+        */
+
+        // この再描画によりtimeChangeが走ってしまうが、debounceChangeTimeにより重複イベントが吸収されるはず
+        $("#timeline").k2goTimeline("create",
             {
-                startTime: this.store.getTimelineStartTime(), // 左端の日時
-                endTime: this.store.getTimelineEndTime(), // 右端の日時
-                currentTime: this.store.getTimelineCurrentTime(), // 摘み（ポインタ）の日時
-                minTime: this.store.getTimelineStartTime(), // 過去方向への表示可能範囲
-                maxTime: this.store.getTimelineEndTime(), // 未来方向への表示可能範囲
-                timeChange: function (pTimeInfo) {
-                    debounceChangeTime(pTimeInfo);
-                    // pTimeInfo.  startTimeから左端の日時を取得
-                    // pTimeInfo.    endTimeから右端の日時を取得
-                    // pTimeInfo.currentTimeから摘み（ポインタ）の日時を取得
-                },
-                barMove: function (pTimeInfo) {
-                    debounceChangeTime(pTimeInfo);
-                },
-                barMoveEnd: function (pTimeInfo) {
-                    debounceChangeTime(pTimeInfo);
+                timeInfo:
+                {
+                    minTime: minMaxTime.minTime,
+                    maxTime: minMaxTime.maxTime,
+                    startTime: start,
+                    endTime: end,
+                    currentTime: current
                 }
             });
+    }
 
-
-        this.timelineSettingDialog = new TimelineSettingDialog(this.store, this.action);
-        document.body.appendChild(this.timelineSettingDialog.getDOM());
-        
-        let timelineSettingButton = new Button();
-        timelineSettingButton.getDOM().classList.add("timeline_setting_button");
-        document.getElementById('timeline').appendChild(timelineSettingButton.getDOM());
-        timelineSettingButton.on('click', () => {
-            this.timelineSettingDialog.show((err, data) => {
-                this.action.changeTimelineRange(data);
+    playTimeline() {
+        $("#timeline").k2goTimeline("start",
+            {
+                fps: 1,       // 1秒間に1回描画
+                speed: 100,       // 1秒間に100ピクセル移動
+                stop: () => {
+                    // rangeバーの終端で勝手に止まるようだ
+                    const dom = this.timelinePlayButton.getDOM();
+                    if (dom.classList.contains(timelinePlayButtonPressed)) {
+                        dom.classList.remove(timelinePlayButtonPressed);
+                    }
+                }
             });
-        });
+    }
+    stopTimeline() {
+        $("#timeline").k2goTimeline("stop");
+    }
+
+    init() {
+        this.initTimeline();
 
         this.store.on(Store.EVENT_DONE_CHANGE_TIMELINE_RANGE, (err) => {
-            const start = this.store.getTimelineStartTime();
-            const end = this.store.getTimelineEndTime();
-            const current = this.store.getTimelineCurrentTime();
-            $("#timeline").k2goTimeline("create",
-            {
-                timeInfo :
-                {
-                  minTime     : start,
-                  maxTime     : end,
-                  startTime   : start,
-                  endTime     : end,
-                  currentTime : current
+            this.updateTimeline();
+        });
+
+        this.store.on(Store.EVENT_DONE_CHANGE_TIME, (err) => {
+            this.updateTimeline();
+        });
+
+        this.store.on(Store.EVENT_DONE_CHANGE_TIMELINE_RANGE_BAR, (err) => {
+            const rangeBar = this.store.getTimelineRangeBar();
+            if (rangeBar && rangeBar.hasOwnProperty('rangeStartTime') && rangeBar.hasOwnProperty('rangeEndTime')) {
+                /*
+                let minMaxTime = {
+                    minTime : $(".k2go-timeline-main").data("options.k2goTimeline").minTime,
+                    maxTime : $(".k2go-timeline-main").data("options.k2goTimeline").maxTime
                 }
-            });
+                let startEndTime = {
+                    startTime : $(".k2go-timeline-main").data("options.k2goTimeline").startTime,
+                    endTime : $(".k2go-timeline-main").data("options.k2goTimeline").endTime
+                }
+                this.__extrudeStartEndTime(startEndTime, rangeBar.rangeStartTime);
+                this.__extrudeStartEndTime(startEndTime, rangeBar.rangeEndTime);
+                this.__extrudeMinMaxTime(minMaxTime, startEndTime.startTime);
+                this.__extrudeMinMaxTime(minMaxTime, startEndTime.endTime);
+                $(".k2go-timeline-main").data("options.k2goTimeline").minTime = minMaxTime.minTime;
+                $(".k2go-timeline-main").data("options.k2goTimeline").maxTime = minMaxTime.maxTime;
+                $(".k2go-timeline-main").data("options.k2goTimeline").startTime = startEndTime.startTime;
+                $(".k2go-timeline-main").data("options.k2goTimeline").endTime = startEndTime.endTime;
+                */
+
+                // この関数、1度呼ぶとなんとpTimeInfoの全ての値が変わる！！
+                // しかもレンジが現状の範囲外だとチェック関数でエラーで止まる。
+                $("#timeline").k2goTimeline("showRangeBar", rangeBar);
+            } else {
+                $("#timeline").k2goTimeline("hiddenRangeBar");
+            }
         });
 
         this.initWindow();
@@ -172,11 +218,34 @@ class GUI extends EventEmitter {
             this.addUserContentSelect(metaData);
         });
 
-        // コンテンツ追加後にMetaDataが更新されたタイミングでレイヤーリストをEnableにする
-        this.store.on(Store.EVENT_DONE_UPDATE_METADATA, (err, meta) => {
+        // コンテンツ追加後に
+        // MetaDataが更新されたタイミングでレイヤーリストをEnableにする
+        // syncボタンの状態を更新
+        this.store.on(Store.EVENT_DONE_UPDATE_METADATA, (err, metaData) => {
+            let meta = metaData;
+            if (metaData.length === 1) {
+                meta = metaData[0];
+            }
             if (!err && meta.hasOwnProperty('id')) {
                 this.contentID.innerText = meta.id;
                 this.layerList.setEnable(true);
+
+                // copyright更新
+                this.showCopyrights(document.getElementById('itowns'), meta)
+            }
+            // syncの更新
+            if (!err) {
+                const isSync = ITownsUtil.isTimelineSync(meta);
+                const dom = this.timelineSyncButton.getDOM();
+                if (isSync) {
+                    if (!dom.classList.contains(pressedClassName)) {
+                        dom.classList.add(pressedClassName);
+                    }
+                } else {
+                    if (dom.classList.contains(pressedClassName)) {
+                        dom.classList.remove(pressedClassName);
+                    }
+                }
             }
         });
 
@@ -184,6 +253,9 @@ class GUI extends EventEmitter {
             if (!err && meta.hasOwnProperty('id')) {
                 this.contentID.innerText = meta.id;
                 this.layerList.setEnable(true);
+
+                // copyright更新
+                this.showCopyrights(document.getElementById('itowns'), meta)
             }
         });
 
@@ -217,6 +289,133 @@ class GUI extends EventEmitter {
                 backdom.appendChild(text);
             }
         })
+
+        // iframe内にwindowのmousemoveを伝える用
+        this.onMouseMove = this._onMouseMove.bind(this);
+        // iframe内にwindowのmouseupを伝える用
+        this.onMouseUp = this._onMouseUp.bind(this);
+    }
+
+    initTimeline() {
+        // 一定間隔同じイベントが来なかったら実行するための関数
+        let debounceChangeTime = (() => {
+            const interval = 100;
+            let timer;
+            return (pTimeInfo, func = null) => {
+                if (this.store.getGlobalSetting() && this.store.getGlobalSetting().hasOwnProperty('reduceInterval')) {
+                    interval = Number(this.store.getGlobalSetting().reduceInterval)
+                }
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                    this.action.changeTimeByTimeline({
+                        currentTime: new Date(pTimeInfo.currentTime),
+                        startTime: new Date(pTimeInfo.startTime),
+                        endTime: new Date(pTimeInfo.endTime)
+                    });
+                    if (func) {
+                        func();
+                    }
+                }, interval);
+            };
+        })();
+        $("#timeline").k2goTimeline(
+            {
+                startTime: this.store.getTimelineStartTime(), // 左端の日時
+                endTime: this.store.getTimelineEndTime(), // 右端の日時
+                currentTime: this.store.getTimelineCurrentTime(), // 摘み（ポインタ）の日時
+                // 以下を設定してもウィンドウサイズ変えると勝手に表示可能範囲が変わる上、
+                // ホイールスクロールの時にズームインできるけどズームアウトできなくなる。
+                //minTime: this.store.getTimelineStartTime(), // 過去方向への表示可能範囲
+                //maxTime: this.store.getTimelineEndTime(), // 未来方向への表示可能範囲
+                timeChange: (pTimeInfo) => {
+                    debounceChangeTime(pTimeInfo, () => {
+                        this.timelineCurrentTime.textContent = this.store.getTimelineCurrentTimeString();
+                    });
+
+                    // pTimeInfo.  startTimeから左端の日時を取得
+                    // pTimeInfo.    endTimeから右端の日時を取得
+                    // pTimeInfo.currentTimeから摘み（ポインタ）の日時を取得
+                },
+                barMove: (pTimeInfo) => {
+                    debounceChangeTime(pTimeInfo, () => {
+                        this.timelineCurrentTime.textContent = this.store.getTimelineCurrentTimeString();
+                    });
+                },
+                barMoveEnd: (pTimeInfo) =>  {
+                    debounceChangeTime(pTimeInfo, () => {
+                        this.timelineCurrentTime.textContent = this.store.getTimelineCurrentTimeString();
+                    });
+                },
+                rangeMoveEnd: (pTimeInfo) => {
+                    this.action.changeTimelineRangeBar(pTimeInfo);
+                }
+            });
+
+        this.timelineSettingDialog = new TimelineSettingDialog(this.store, this.action);
+        document.body.appendChild(this.timelineSettingDialog.getDOM());
+
+        // Syncボタン
+        this.timelineSyncButton = new Button();
+        document.getElementById('timeline').appendChild(this.timelineSyncButton.getDOM());
+        this.timelineSyncButton.getDOM().className = 'timeline_sync_button timeline_sync_button_pressed';
+        this.timelineSyncButton.setDataKey('Sync');
+        document.body.appendChild(this.timelineSyncButton.getDOM());
+        this.timelineSyncButton.on('click', (evt) => {
+            const dom = this.timelineSyncButton.getDOM();
+            if (dom.classList.contains(pressedClassName)) {
+                dom.classList.remove(pressedClassName);
+                this.action.changeTimelineSync({ sync: false });
+            } else {
+                dom.classList.add(pressedClassName);
+                this.action.changeTimelineSync({ sync: true });
+            }
+        });
+
+        let settingWrap = document.createElement('div');
+        settingWrap.classList.add('timeline_setting_wrap');
+
+        // 現在時刻
+        this.timelineCurrentTime = document.createElement('div');
+        this.timelineCurrentTime.textContent = this.store.getTimelineCurrentTime().toString();
+        this.timelineCurrentTime.className = 'timeline_current_time';
+        document.getElementById('timeline').appendChild(this.timelineCurrentTime);
+
+        // 設定ボタン
+        let timelineSettingButton = new Button();
+        timelineSettingButton.getDOM().classList.add("timeline_setting_button");
+        settingWrap.appendChild(timelineSettingButton.getDOM());
+        timelineSettingButton.on('click', () => {
+            this.timelineSettingDialog.show((err, data) => {
+                this.action.changeTimelineRange(data);
+                if (data.hasOwnProperty('rangeStartTime') && data.hasOwnProperty('rangeEndTime')) {
+                    this.action.changeTimelineRangeBar({
+                        rangeStartTime: data.rangeStartTime,
+                        rangeEndTime: data.rangeEndTime
+                    });
+                }
+            });
+        });
+        document.getElementById('timeline').appendChild(settingWrap);
+
+        let playWrap = document.createElement('div');
+        playWrap.classList.add('timeline_play_wrap');
+
+        // 再生ボタン
+        this.timelinePlayButton = new Button();
+        this.timelinePlayButton.getDOM().classList.add("timeline_play_button");
+        playWrap.appendChild(this.timelinePlayButton.getDOM());
+        this.timelinePlayButton.on('click', () => {
+            const dom = this.timelinePlayButton.getDOM();
+            if (dom.classList.contains(timelinePlayButtonPressed)) {
+                dom.classList.remove(timelinePlayButtonPressed);
+                this.stopTimeline();
+            } else {
+                dom.classList.add(timelinePlayButtonPressed);
+                this.playTimeline();
+            }
+        });
+
+        document.getElementById('timeline').appendChild(playWrap);
     }
 
     initWindow() {
@@ -283,42 +482,48 @@ class GUI extends EventEmitter {
         this.itownSelect = new Select();
         this.itownSelect.getDOM().className = "itown_select";
         // サンプルコンテンツの追加
-        this.itownSelect.addOption(JSON.stringify({
-            type: "preset",
-            url: "itowns/gsi_planar.html"
-        }), "Preset:地理院地図 2.5D");
-        this.itownSelect.addOption(JSON.stringify({
-            type: "preset",
-            url: "itowns/gsi.html"
-        }), "Preset:地理院地図 3D");
-        this.itownSelect.addOption(JSON.stringify({
-            type: "preset",
-            url: "itowns/pointcloud_3d_map.html"
-        }), "Preset:pointcloud_3d_map");
-        this.itownSelect.addOption(JSON.stringify({
-            type: "preset",
-            url: "itowns/view_3d_map.html"
-        }), "Preset:view_3d_map");
-        this.itownSelect.addOption(JSON.stringify({
-            type: "preset",
-            url: "itowns/3dtiles_basic.html"
-        }), "Preset:3dtiles_basic");
-        this.itownSelect.addOption(JSON.stringify({
-            type: "preset",
-            url: "itowns/vector_tile_raster_3d.html"
-        }), "Preset:vector_tile_raster_3d");
-
         {
             let xhr = new XMLHttpRequest();
             xhr.onload = () => {
                 if (xhr.status == 200) {
-                    this.itownSelect.addOption(JSON.stringify({
-                        type: "preset",
-                        url: "itowns/ipCameraView/" + xhr.response
-                    }), "Preset:ipCameraView");
+                    try {
+                        const json = JSON.parse(xhr.response);
+                        if (!json.hasOwnProperty('preset_list')) {
+                            throw "Error: invalid preset_list.json";
+                        }
+                        for (let i = 0; i < json.preset_list.length; ++i) {
+                            const preset = json.preset_list[i];
+                            if (!preset.hasOwnProperty('name') || !preset.hasOwnProperty('url')) {
+                                throw "Error: invalid preset_list.json";
+                            }
+                            this.itownSelect.addOption(JSON.stringify({
+                                type: "preset",
+                                url: preset.url
+                            }), "Preset:" + preset.name);
+                        }
+                    }
+                    catch (err) {
+                        window.alert(err);
+                        console.error(err)
+                    }
+
+                    // ipcameraがあれば追加
+                    {
+                        let xhr2 = new XMLHttpRequest();
+                        xhr2.onload = () => {
+                            if (xhr2.status == 200) {
+                                this.itownSelect.addOption(JSON.stringify({
+                                    type: "preset",
+                                    url: "itowns/ipCameraView/" + xhr2.response
+                                }), "Preset:ipCameraView");
+                            }
+                        }
+                        xhr2.open("GET", "itowns/ipCameraView/parameter.txt");
+                        xhr2.send("null");
+                    }
                 }
             }
-            xhr.open("GET", "itowns/ipCameraView/parameter.txt");
+            xhr.open("GET", "itowns/Preset/preset_list.json");
             xhr.send("null");
         }
 
@@ -389,8 +594,26 @@ class GUI extends EventEmitter {
         this.layerProperty = new LayerProperty(this.store, this.action);
         propInner.appendChild(this.layerProperty.getDOM());
 
+        const initLayerProperty = (data) => {
+            let layerData = this.store.getLayerData(data.value);
+            const csv = this.store.getCSVCache(layerData.id);
+            if (csv) {
+                layerData.csv = csv;
+            }
+            const json = this.store.getJSONCache(layerData.id);
+            if (json) {
+                layerData.json = json;
+            }
+            this.layerProperty.initFromLayer(data.value, layerData);
+        };
+
         this.layerList.on(LayerList.EVENT_LAYER_SELECT_CHANGED, (err, data) => {
-            this.layerProperty.initFromLayer(data.value, this.store.getLayerData(data.value));
+            initLayerProperty(data);
+        });
+        this.layerProperty.on(LayerProperty.EVENT_LAYER_PROPERTY_NEED_UPDATE_GUI, (err, data) => {
+            const scrollTop = propInner.scrollTop;
+            initLayerProperty(data);
+            propInner.scrollTop = scrollTop;
         });
 
         // 速度計測ボタン
@@ -435,9 +658,39 @@ class GUI extends EventEmitter {
                 this.iframe.contentWindow.focus();
             };
 
+            // iframe外のmouseupを拾ってiframeに投げる
+            window.addEventListener('mouseup', this.onMouseUp);
+            // iframe外のmousemoveを拾ってiframeに投げる
+            window.addEventListener('mousemove', this.onMouseMove);
+
             this.action.connectIFrame(this.iframe);
         };
+        this.iframe.onunload = () => {
+            window.removeEventListener('mouseup', this.onMouseUp);
+            window.removeEventListener('mousemove', this.onMouseMove);
+        };
         document.getElementById('itowns').appendChild(this.iframe);
+    }
+
+    _onMouseUp(event) {
+        const evt = new CustomEvent('mouseup', { bubbles: true, cancelable: false });
+        const clRect = this.iframe.getBoundingClientRect();
+        evt.clientX = event.clientX - clRect.left;
+        evt.clientY = event.clientY - clRect.top;
+        this.iframe.contentWindow.dispatchEvent(evt);
+        this.iframe.contentWindow.document.documentElement.dispatchEvent(evt);
+    }
+
+    _onMouseMove(event) {
+        const clRect = this.iframe.getBoundingClientRect();
+        const evt = new CustomEvent('mousemove', { bubbles: true, cancelable: false });
+        Object.defineProperty(evt, 'target', { writable: false, value: this.iframe.contentDocument.body });
+        evt.clientX = event.clientX + clRect.left;
+        evt.clientY = event.clientY + clRect.top;
+        evt.offsetX = event.clientX;
+        evt.offsetY = event.clientY;
+        this.iframe.contentWindow.dispatchEvent(evt);
+        this.iframe.contentWindow.document.documentElement.dispatchEvent(evt);
     }
 
     addITownContent(param, thumbnailBuffer) {
@@ -529,6 +782,50 @@ class GUI extends EventEmitter {
             a.dispatchEvent(e);
         }
         save(text, "performance_" + dataID + ".csv")
+    }
+
+    /**
+     * Copyrightを表示.
+     * elemにCopyright用エレメントをappendChild
+     * @param {*} elem 
+     * @param {*} metaData 
+     */
+    showCopyrights(elem, metaData) {
+        if (elem &&
+            metaData.type === Constants.TypeWebGL &&
+            metaData.hasOwnProperty('layerList')) {
+
+            let copyrightText = ITownsUtil.createCopyrightText(metaData);
+            if (copyrightText.length === 0) {
+                let copyrightElem = document.getElementById("copyright:" + metaData.id);
+                if (copyrightElem) {
+                    copyrightElem.style.display = "none";
+                }
+                return;
+            }
+
+            let copyrightElem = document.getElementById("copyright:" + metaData.id);
+            if (copyrightElem) {
+                copyrightElem.innerHTML = copyrightText;
+                copyrightElem.style.right = "0px";
+                copyrightElem.style.top = "0px";
+                copyrightElem.style.zIndex = elem.style.zIndex;
+                copyrightElem.style.display = "inline";
+            } else {
+                copyrightElem = document.createElement("pre");
+                copyrightElem.style.display = "inline";
+                copyrightElem.id = "copyright:" + metaData.id;
+                copyrightElem.className = "copyright";
+                copyrightElem.innerHTML = copyrightText;
+                copyrightElem.style.right = "0px";
+                copyrightElem.style.top = "0px";
+                copyrightElem.style.position = "absolute";
+                copyrightElem.style.height = "auto";
+                copyrightElem.style.whiteSpace = "pre-line";
+                copyrightElem.style.zIndex = elem.style.zIndex;
+                elem.appendChild(copyrightElem);
+            }
+        }
     }
 
 }
