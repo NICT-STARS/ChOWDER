@@ -60,7 +60,6 @@ class ControllerData extends EventEmitter {
 		this.cursorColor = generateCursorColor();
 		this.cursorSize = 100;
 		this.groupCheck = {}; // グループがチェックされているかどうか. { groupID : true, groupID2 : false }の形式
-		this.userName = "Guest";
 	}
 	set(data) {
 		if (data) {
@@ -97,9 +96,6 @@ class ControllerData extends EventEmitter {
 			}
 			if (data.hasOwnProperty('displaySelectedGroup')) {
 				this.displaySelectedGroup = String(data.displaySelectedGroup);
-			}
-			if (data.hasOwnProperty('userName')) {
-				this.userName = String(data.userName);
 			}
 		}
 		this.emit('update', null, this.get());

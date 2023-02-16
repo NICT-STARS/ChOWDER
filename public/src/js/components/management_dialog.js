@@ -135,16 +135,13 @@ class ManagementDialog extends EventEmitter {
         }
 
         {
-            this.adminSetting = document.createElement("div");
-            dbFrameBackground.appendChild(this.adminSetting);
-
             let title = document.createElement('h4');
             title.textContent = i18next.t("admin_setting_password");
-            this.adminSetting.appendChild(title);
+            dbFrameBackground.appendChild(title);
 
             let passFrame = document.createElement('div');
             passFrame.className = "frame";
-            this.adminSetting.appendChild(passFrame);
+            dbFrameBackground.appendChild(passFrame);
 
             {
                 let passInputFrame = document.createElement('div');
@@ -265,7 +262,7 @@ class ManagementDialog extends EventEmitter {
                 authTargetWrap1.style.width = "380px";
                 authTargetWrap1.style.display = "inline-block"
                 authTargetAllWrap.appendChild(authTargetWrap1);
-
+    
                 // ラベル
                 let authLabelWrap1 = document.createElement('div');
                 {
@@ -274,7 +271,7 @@ class ManagementDialog extends EventEmitter {
                     this.editableContentLabel.className = "auth_target_label";
                     this.editableContentLabel.textContent = i18next.t("editable_content");
                     authLabelWrap1.appendChild(this.editableContentLabel);
-
+    
                     // 閲覧可能コンテンツ
                     this.viewableContentLabel = document.createElement('span');
                     this.viewableContentLabel.className = "auth_target_label";
@@ -282,7 +279,7 @@ class ManagementDialog extends EventEmitter {
                     authLabelWrap1.appendChild(this.viewableContentLabel);
                 }
                 authTargetWrap1.appendChild(authLabelWrap1);
-
+    
                 // Selectを入れるdiv
                 this.authTargetFrame1 = document.createElement('div');
                 this.authTargetFrame1.className = "auth_target_frame";
@@ -295,7 +292,7 @@ class ManagementDialog extends EventEmitter {
                 authTargetWrap2.style.width = "380px";
                 authTargetWrap2.style.display = "inline-block"
                 authTargetAllWrap.appendChild(authTargetWrap2);
-
+                
                 // ラベル
                 let authLabelWrap2 = document.createElement('div');
                 {
@@ -312,7 +309,7 @@ class ManagementDialog extends EventEmitter {
                     authLabelWrap2.appendChild(this.viewableSiteLabel);
                 }
                 authTargetWrap2.appendChild(authLabelWrap2);
-
+                
                 // Selectを入れるdiv
                 this.authTargetFrame2 = document.createElement('div');
                 this.authTargetFrame2.className = "auth_target_frame";
@@ -462,7 +459,7 @@ class ManagementDialog extends EventEmitter {
             displayPermissionFrame.appendChild(this.applyDisplaySettingMessage);
         }
 
-
+        
         let title5 = document.createElement('h4');
         title5.textContent = i18next.t("application_control");
         this.dom.appendChild(title5);
@@ -719,7 +716,7 @@ class ManagementDialog extends EventEmitter {
                     this.viewableSiteLabel.style.display = "none"
                     this.viewableSiteSelect.getDOM().style.display = "none"
                 }
-
+    
                 if (user.type === "display")
                 {
                     this.editableDisplayLabel.style.display = "none"
@@ -730,7 +727,7 @@ class ManagementDialog extends EventEmitter {
                     this.editableDisplayLabel.style.display = "inline-block"
                     this.displayEditableSelect.getDOM().style.display = "inline-block"
                 }
-
+    
                 for (let i = 0; i < this.userList.length; i = i + 1) {
                     if (this.userList[i].type !== "admin" && this.userList[i].type !== "api") {
                         let listContentName = this.userList[i].id;
@@ -939,7 +936,7 @@ class ManagementDialog extends EventEmitter {
                 if (type === "admin") {
                     this.adminAuthSelectPass.addOption(this.userList[i].id, this.userList[i].name);
                 }
-                if (type !== "admin" && type !== "guest" && type !== "display" && type !== "electronDisplay") {
+                if (type !== "admin" && type !== "guest" && type !== "display") {
                     this.authSelectPass.addOption(this.userList[i].id, this.userList[i].name);
                 }
             }
@@ -963,7 +960,7 @@ class ManagementDialog extends EventEmitter {
                             oldInput.setEnable(true);
                             newInput.setEnable(true);
                         }
-                        else if (type === "group" || type === "api" || type === "electron" || type === "moderator" || type === "attendee") {
+                        else if (type === "group" || type === "api" || type === "electron") {
                             oldInput.setEnable(false);
                             newInput.setEnable(true);
                         }
@@ -1057,7 +1054,7 @@ class ManagementDialog extends EventEmitter {
      * 管理GUIを表示する
      * @param contents.dblist dbリスト
      */
-    show(userList, displayGroupList, contents, currentDB, maxHistoryNum, displayPermissionList, isAdmin) {
+    show(userList, displayGroupList, contents, currentDB, maxHistoryNum, displayPermissionList) {
         this.initAll();
         this.userList = userList;
         this.displayGroupList = displayGroupList;
@@ -1082,12 +1079,6 @@ class ManagementDialog extends EventEmitter {
         this.initDisplayPermission(contents, displayPermissionList);
 
         this.initApplicationControlGUI();
-
-        if(isAdmin === true){
-            this.adminSetting.style.display = "block";
-        }else{
-            this.adminSetting.style.display = "none";
-        }
 
         document.body.appendChild(this.dom);
     }

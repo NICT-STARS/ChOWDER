@@ -78,7 +78,7 @@ class Tabs extends EventEmitter {
 				tabElem.className = tabElem.className + " active";
 				document.getElementById(tabContent.id + "_box").style.display = "block";
 				tabContent.onclick();
-				this.emit(Tabs.EVENT_TAB_CHANGED_POST,null, {"tabName":tabName});
+				this.emit(Tabs.EVENT_TAB_CHANGED_POST, null);
 			};
 		}
 		elem.appendChild(link);

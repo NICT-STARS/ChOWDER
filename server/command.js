@@ -9,7 +9,7 @@
 (()=>{
 	"use strict";
 
-	const Command = {
+	let Command = {
 		// request command
 		AddContent : "AddContent",
 		AddTileContent : "AddTileContent",
@@ -24,10 +24,6 @@
 		GetWindowMetaData : "GetWindowMetaData",
 		GetVirtualDisplay : "GetVirtualDisplay",
 		GetGroupList : "GetGroupList",
-		UploadTileimage : "UploadTileimage",
-		GetLoginUserList : "GetLoginUserList",
-		GetSelfStatus : "GetSelfStatus",
-		UpdateLoginUserControllerID : "UpdateLoginUserControllerID",
 
 		// using both server and client
 		Update : "Update",

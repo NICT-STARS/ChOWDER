@@ -14,9 +14,9 @@ const store = new Store(action);
 const gui = new GUI(store, action);
 const display = new Display(store, action, gui);
 
-window.addEventListener('load', async() => {
+window.addEventListener('load', () => {
 	action.connect();
-	await gui.init();
+	gui.init();
 });
 window.onunload = () => {
 	store.release();

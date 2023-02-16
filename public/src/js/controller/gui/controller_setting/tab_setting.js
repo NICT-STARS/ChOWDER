@@ -29,10 +29,6 @@ function TabSetting() {
             name : "Layout",
             id : Constants.TabIDLayout,
             onclick : () => { this.changeTab('Layout'); }
-        }, {
-            name : "Users",
-            id : Constants.TabIDUsers,
-            onclick : () => { this.changeTab('Users'); }
         }
     ]
 }

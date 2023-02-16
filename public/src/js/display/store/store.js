@@ -33,8 +33,6 @@ class Store extends EventEmitter {
         this.itownFuncDict = {};
         this.controllerCounterForCursor = { connectionCount: -1 };
 
-        this.loginUsersData = {};
-
         // 接続時に遅延して初期化する
         this.receiver = null;
         this.videoStore = null;

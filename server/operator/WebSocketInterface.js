@@ -63,18 +63,6 @@
                 }
             }
 
-            ws_connector.on(Command.GetLoginUserList, (data, resultCallback) => {
-                this.commandOperator.getLoginUserList(data, resultCallback);
-            });
-
-            ws_connector.on(Command.GetSelfStatus, (data, resultCallback, socketid) => {
-                this.commandOperator.getSelfStatus(socketid, data, resultCallback);
-            });
-
-            ws_connector.on(Command.UpdateLoginUserControllerID, (data, resultCallback, socketid) => {
-                this.commandOperator.updateLoginUserControllerID(socketid, data, resultCallback);
-            });
-
             ws_connector.on(Command.AddMetaData, (data, resultCallback) => {
                 this.commandOperator.addMetaData(data, resultCallback);
             });
@@ -292,10 +280,6 @@
                 let metaData = data.metaData,
                     binaryData = data.contentData;
                 this.commandOperator.upload(metaData, binaryData, resultCallback);
-            });
-
-            ws_connector.on(Command.UploadTileimage, (data, resultCallback, socketID) => {
-                this.commandOperator.receiveTileimage(data.metaData, data.contentData, socketID, resultCallback);
             });
 
             ws_connector.registerEvent(ws, ws_connection);

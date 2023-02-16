@@ -8,11 +8,8 @@
 
     const fs = require('fs');
     const path = require('path');
-    const child_process = require("child_process");
     const Util = require('./../util.js');
     const Zip = require("./Zip.js");
-    const SegmentReceiver = require("./SegmentReceiver.js");
-    const LoginUser = require("./LoginUser.js");
 
     let phantom = null;
     try {
@@ -46,9 +43,6 @@
 
     class Executer {
         constructor() {
-            this.segmentReceiver = new SegmentReceiver();
-            this.loginUser = new LoginUser();
-
             this.client = redis.createClient(6379, '127.0.0.1', { 'return_buffers': true });
             this.textClient = redis.createClient(6379, '127.0.0.1', { 'return_buffers': false });
 
@@ -217,24 +211,17 @@
             this.textClient.exists(this.groupListPrefix, (err, doesExists) => {
                 if (!err && doesExists !== 0) {
                     this.textClient.get(this.groupListPrefix, (err, reply) => {
+                        let data = reply;
                         if (!reply) {
-                            const data = { "grouplist": [], "displaygrouplist": [] };
+                            data = { "grouplist": [], "displaygrouplist": [] };
                             endCallback(err, data);
                             return;
                         }
-
-                        const data = (()=>{
-                            try {
-                                return JSON.parse(reply);
-                            } catch (e) {
-                                return null;
-                            }
-                        })();
-
-                        if(data === null){
+                        try {
+                            data = JSON.parse(data);
+                        } catch (e) {
                             return false;
                         }
-
                         endCallback(err, data);
                     });
                 } else {
@@ -689,9 +676,7 @@
 
         changeUUIDPrefix(socketid, dbname, endCallback) {
             this.isAdmin(socketid, (err, isAdmin) => {
-                if (err) {
-                    endCallback("error");
-                } else if(isAdmin || this.loginUser.getGroupIDFromSocketID(socketid) === "Moderator"){
+                if (!err && isAdmin) {
                     this.textClient.hget(this.frontPrefix + 'dblist', dbname, (err, reply) => {
                         if (!err) {
                             this.getGlobalSetting((err, setting) => {
@@ -754,38 +739,17 @@
                                 displayEditable: "all",
                                 viewableSite: "all",
                                 group_manipulatable: false
-
-                            }, () => {
-                                // ElectronDisplay設定の初期登録
-                                this.changeGroupUserSetting("master", "ElectronDisplay", {
-                                    viewable: "all",
-                                    editable: "all",
-                                    displayEditable: "all",
-                                    viewableSite: "all",
-                                    group_manipulatable: false
-
-                                }, () => {
-                                    // Moderator設定の初期登録
-                                    this.changeGroupUserSetting("master", "Moderator", {
-                                        viewable: "all",
-                                        editable: "all",
-                                        displayEditable: "all",
-                                        viewableSite: "all",
-                                        group_manipulatable: false
-
-                                    }, () => {
-                                        // Moderator設定の初期登録
-                                        this.changeGroupUserSetting("master", "Attendee", {
-                                            viewable: "all",
-                                            editable: "all",
-                                            displayEditable: "all",
-                                            viewableSite: "all",
-                                            group_manipulatable: false
-                                        })
-                                    })
-                                })
-                            })
-                        })
+                            });
+                        }, () => {
+                            // ElectronDisplay設定の初期登録
+                            this.changeGroupUserSetting("master", "ElectronDisplay", {
+                                viewable: "all",
+                                editable: "all",
+                                displayEditable: "all",
+                                viewableSite: "all",
+                                group_manipulatable: false
+                            });
+                        });
                     });
                 }
                 this.addGroup("master", "group_default", "default", null, (err, reply) => {
@@ -815,9 +779,7 @@
          */
         newDB(socketid, name, endCallback) {
             this.isAdmin(socketid, (err, isAdmin) => {
-                if (err) {
-                    endCallback("error");
-                } else if(isAdmin || this.loginUser.getGroupIDFromSocketID(socketid) === "Moderator"){
+                if (!err && isAdmin) {
                     if (name.length > 0) {
                         this.textClient.hexists(this.frontPrefix + 'dblist', name, (err, doesExists) => {
                             if (!err && doesExists !== 1) {
@@ -856,9 +818,7 @@
          */
         renameDB(socketid, name, newName, endCallback) {
             this.isAdmin(socketid, (err, isAdmin) => {
-                if (err) {
-                    endCallback("error");
-                } else if(isAdmin || this.loginUser.getGroupIDFromSocketID(socketid) === "Moderator"){
+                if (!err && isAdmin) {
                     if (name.length > 0 && newName.length > 0) {
                         if (name === "default" || newName === "default") {
                             endCallback("cannot change default db name");
@@ -988,9 +948,7 @@
          */
         changeGlobalSetting(socketid, json, endCallback) {
             this.isAdmin(socketid, (err, isAdmin) => {
-                if (err) {
-                    endCallback("error");
-                } else if(isAdmin || this.loginUser.getGroupIDFromSocketID(socketid) === "Moderator"){
+                if (!err && isAdmin) {
                     this.textClient.hmset(this.globalSettingPrefix, json, (err) => {
                         if (err) {
                             console.error(err);
@@ -1233,28 +1191,6 @@
                         }
                         userList.push(electronDisplayData);
 
-                        // Moderator/Attendee
-                        let moderatorData = { name: "Moderator", id: "Moderator", type: "moderator" };
-                        if (setting.hasOwnProperty("Moderator")) {
-                            for (let k = 0; k < userSettingKeys.length; k = k + 1) {
-                                let key = userSettingKeys[k];
-                                if (setting.Moderator.hasOwnProperty(key)) {
-                                    moderatorData[key] = setting.Moderator[key];
-                                }
-                            }
-                        }
-                        userList.push(moderatorData);
-                        let attendeeData = { name: "Attendee", id: "Attendee", type: "attendee" };
-                        if (setting.hasOwnProperty("Attendee")) {
-                            for (let k = 0; k < userSettingKeys.length; k = k + 1) {
-                                let key = userSettingKeys[k];
-                                if (setting.Attendee.hasOwnProperty(key)) {
-                                    attendeeData[key] = setting.Attendee[key];
-                                }
-                            }
-                        }
-                        userList.push(attendeeData);
-
                         if (endCallback) {
                             endCallback(null, userList);
                         }
@@ -1289,30 +1225,33 @@
          * socketidごとの権限情報キャッシュを全て更新する
          */
         updateAuthority(adminSetting, groupSetting) {
-            for (let socketid in this.socketidToAccessAuthority) {
-                const authority = this.socketidToAccessAuthority[socketid];
+            let i,
+                socketid,
+                authority;
+
+            for (socketid in this.socketidToAccessAuthority) {
+                authority = this.socketidToAccessAuthority[socketid];
                 if (this.socketidToUserID.hasOwnProperty(socketid)) {
-                    const role_id = this.socketidToUserID[socketid];
+                    let id = this.socketidToUserID[socketid];
                     if (adminSetting) {
-                        if (adminSetting.hasOwnProperty(role_id)) {
-                            authority.id = role_id;
+                        if (adminSetting.hasOwnProperty(id)) {
+                            authority.id = id;
                             authority.viewable = "all";
                             authority.editable = "all";
                             authority.displayEditable = [];
                             authority.viewableSite = "all";
                             authority.group_manipulatable = true;
                             authority.is_admin = true;
-
                             this.socketidToAccessAuthority[socketid] = authority;
                         }
                     }
                     if (groupSetting) {
-                        if (groupSetting.hasOwnProperty(role_id)) {
-                            authority.id = role_id;
+                        if (groupSetting.hasOwnProperty(id)) {
+                            authority.id = id;
                             for (let k = 0; k < userSettingKeys.length; k = k + 1) {
-                                const key = userSettingKeys[k];
-                                if (groupSetting[role_id].hasOwnProperty(key)) {
-                                    authority[key] = groupSetting[role_id][key];
+                                let key = userSettingKeys[k];
+                                if (groupSetting[id].hasOwnProperty(key)) {
+                                    authority[key] = groupSetting[id][key];
                                 }
                             }
                             this.socketidToAccessAuthority[socketid] = authority;
@@ -1320,7 +1259,7 @@
                     }
                 }
             }
-            console.log("-----updateAuthority------");
+            console.log("-----updateAuthority------")
             //console.log(this.socketidToAccessAuthority)
         }
 
@@ -1347,7 +1286,6 @@
             if (!this.socketidToUserID.hasOwnProperty(socketid)) {
                 this.socketidToUserID[socketid] = id;
             }
-
             if (!this.socketidToAccessAuthority.hasOwnProperty(socketid)) {
                 this.socketidToAccessAuthority[socketid] = {};
                 // socketidごとの権限情報キャッシュを全て更新する
@@ -1365,7 +1303,7 @@
          * @param {Function} endCallback 終了時に呼ばれるコールバック
          */
         login(id, password, socketid, controllerid, endCallback) {
-            const getLoginResult = (controllerData) => {
+            let getLoginResult = (controllerData) => {
                 if (this.socketidToAccessAuthority.hasOwnProperty(socketid)) {
                     return {
                         id: id,
@@ -1383,13 +1321,12 @@
                 }
             };
             this.getControllerData(controllerid, (err, controllerData) => {
-                this.getAdminUserSetting((err, adminUserData) => {
-                    if (adminUserData.hasOwnProperty(id)) {
+                this.getAdminUserSetting((err, data) => {
+                    if (data.hasOwnProperty(id)) {
                         // 管理ユーザー
-                        const isValid = this.validatePassword(adminUserData[id].password, password);
+                        let isValid = this.validatePassword(data[id].password, password);
                         if (isValid) {
-                            this.saveLoginInfo(socketid, id, adminUserData);
-                            this.loginUser.put(controllerid, socketid, id);
+                            this.saveLoginInfo(socketid, id, data);
                             // 成功したらsocketidを返す
                             endCallback(null, getLoginResult(controllerData));
                         } else {
@@ -1400,24 +1337,18 @@
                             if (!err) {
                                 if (setting.hasOwnProperty(id)) {
                                     // グループユーザー設定登録済グループユーザー
-                                    const isValid = (()=>{
-                                        if (id === "Guest" || id === "Display") {
-                                            return true;
-                                        }else{
-                                            return this.validatePassword(setting[id].password, password);
-                                        }
-                                    })();
-
+                                    let isValid = this.validatePassword(setting[id].password, password);
+                                    if (id === "Guest" || id === "Display") {
+                                        isValid = true;
+                                    }
                                     if (isValid) {
                                         this.saveLoginInfo(socketid, id, null, setting);
-                                        this.loginUser.put(controllerid, socketid, id);
                                         endCallback(null, getLoginResult(controllerData));
                                     } else {
                                         endCallback("failed to login");
                                     }
                                 } else {
                                     // グループユーザー設定に登録されていないグループ
-                                    this.loginUser.put(controllerid, socketid, id);
                                     endCallback(null, getLoginResult(controllerData));
                                 }
                             } else {
@@ -1427,11 +1358,6 @@
                     }
                 });
             });
-        }
-
-        logout(socketid){
-            this.removeAuthority(socketid);
-            this.loginUser.delete(socketid);
         }
 
         /**
@@ -1654,8 +1580,8 @@
 
         /**
          * 適切なサポート済Mimeを返す
-         * @param {*} metaData
-         * @param {*} contentData
+         * @param {*} metaData 
+         * @param {*} contentData 
          */
         getMime(metaData, contentData) {
             if (metaData.type === "video") {
@@ -2338,7 +2264,7 @@
          */
         addHistoricalContent(socketid, metaData, data, endCallback) {
             let contentData = data;
-            console.log("addHistoricalContent:" + metaData.id + "  :" + metaData.creator);
+            console.log("addHistoricalContent:" + metaData.id + ":" + metaData.content_id);
 
             const mime = this.getMime(metaData, contentData);
             if (mime) {
@@ -3152,7 +3078,7 @@
         }
 
         /*
-        * @param {Function} callback (string, displayIDList)
+        * @param {Function} callback (string, displayIDList)  
         *                   displayIDListはこの関数によって設定変更されたdisplayのdisplayidのリスト
         */
         updateDisplayPermissionList(data, callback) {
@@ -3346,93 +3272,6 @@
             } else {
                 callback(new Error("JSONRPC param.type undefined").toString(), null);
             }
-        }
-
-        /**
-         * 分割されたtileimageを順次受け取って、全部揃ったら合体したものを返す
-         * @method receiveTileimage
-         * @param {{id:string,segment_index:number,segment_max:number}} metaParams metadataから抽出したparams
-         * @param {ArrayBuffer} binaryData 千切れたbinary
-         * @return {Buffer}
-         */
-        receiveTileimage(metaParams, binaryData, socketID){
-            const arrBuf = this.segmentReceiver.receive(metaParams, binaryData, socketID);
-            if(arrBuf !== null){
-                return Buffer.from(arrBuf);
-            }
-            return null;
-        }
-
-        /**
-         * バイナリをファイルとして書き込む。書き込んだらメモリからデータを消す
-         * @method writeTileimageFile
-         * @param {{id:string,segment_index:number,segment_max:number}} metaParams metadataから抽出したparams
-         * @param {ArrayBuffer} wholeBinary
-         * @return {Buffer}
-         */
-        writeTileimageFile(metaParams, wholeBinary){
-            return new Promise((resolve,reject)=>{
-                const writefilepath = `../bin/${metaParams.id}.${metaParams.file_ext}`;
-                fs.writeFile(writefilepath,wholeBinary,(err)=>{
-                    if(err){
-                        reject(err);
-                    }
-                    this.segmentReceiver.deleteContainerFromImageID(metaParams.id);
-                    resolve(writefilepath);
-                });
-            });
-        }
-
-        runTileimageShell(filepath, metaParams){
-            return new Promise((resolve,reject)=>{
-                const batCmd = (()=>{
-                    console.log("server os:",process.platform);
-                    if(process.platform==='win32'){
-                        return `cd ../bin/ && tileimage.bat ${filepath}  ${metaParams.creator}`;
-                    }else if(process.platform==='linux'){
-                        return `sh ../bin/tileimage.sh ${filepath}`;
-                    }else if(process.platform==='darwin'){
-                        return `sh ../bin/tileimage.sh ${filepath}`;
-                    }else{
-                        return `sh ../bin/tileimage.sh ${filepath}`;
-                    }
-                })();
-
-                if(process.platform==='win32'){
-                    child_process.exec(batCmd,(err,stdout,stderr)=>{
-                        if(err){
-                            console.log(stderr);
-                            reject(err);
-                        }
-                        resolve();
-                    });
-                }else{
-                    const command = child_process.spawn("sh", [`../bin/tileimage.sh`, `${filepath}`, `${metaParams.creator}`]);
-                    command.stdout.on("data",(stdout)=>{
-                        console.log(stdout.toString());
-                    });
-                    command.on("close",(code)=>{
-                        console.log(`[runTileimageShell] close code:${code}`);
-                        resolve();
-                    });
-                }
-            });
-        }
-
-        removeTileimageFile(filepath){
-            return new Promise((resolve,reject)=>{
-                fs.unlink(filepath,(err)=>{
-                    if(err){
-                        console.log(stderr);
-                        reject(err);
-                    }
-                    resolve();
-                });
-            });
-        }
-
-        deleteTileimageContainerFromSocketID(socketID){
-            this.segmentReceiver.deleteContainerFromSocketID(socketID);
         }
     }
 
